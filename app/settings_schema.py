@@ -64,6 +64,8 @@ SCHEMA = [
     {"group": "panel", "path": "panel.title", "label": "面板标题", "type": "str"},
     {"group": "panel", "path": "panel.page_size", "label": "每页条数", "type": "int", "min": 10, "max": 500},
     {"group": "panel", "path": "panel.recent_keep", "label": "内存中保留的最近消息数", "type": "int", "min": 50, "max": 10000},
+    {"group": "panel", "path": "panel.apk_download_enabled", "label": "允许下载安装包（总开关）", "type": "bool",
+     "hint": "关闭时，外部访问 apk1 / apk2 / apk3 一律返回「下载未开启」；打开后才能下载。改完立即生效，不用重启服务。"},
 
     # ---- 日志 ----
     {"group": "log", "path": "log.level", "label": "日志级别", "type": "choice",

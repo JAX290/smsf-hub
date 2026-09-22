@@ -200,6 +200,12 @@ panel:
   # 面板上"最近消息"保留多少条
   recent_keep: 500
 
+  # 安装包（APK）下载总开关。
+  # false = 外部访问 notic.mulinsen.win/apk1、apk2、apk3 一律返回「下载未开启」；
+  # true  = 允许下载。
+  # 在面板「参数设置 → 面板」里也能改，改完立即生效，不用重启服务。
+  apk_download_enabled: false
+
   # 最近消息落盘文件（重启服务后列表不会丢）。
   # 相对路径相对于 config.yaml 所在目录。
   recent_file: "./app/data/recent.jsonl"

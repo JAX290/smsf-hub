@@ -52,6 +52,8 @@ DEFAULTS: dict[str, Any] = {
         # 面板是否要求登录口令。默认 false —— 面板只绑 Tailscale IP，
         # 由 Tailscale 本身做访问控制。想加一道口令就改成 true。
         "auth_enabled": False,
+        # 安装包（APK）下载总开关。false = 外部访问 apk1/apk2/apk3 一律拒绝。
+        "apk_download_enabled": False,
     },
     "log": {
         "level": "INFO",

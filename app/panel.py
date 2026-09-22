@@ -9,11 +9,13 @@ import logging
 import secrets
 import time
 import zipfile
+
+import yaml
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from .channels import CHANNEL_CLASSES, CHANNEL_NAMES
@@ -85,6 +87,30 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         }
         base.update(kw)
         return base
+
+    # ---------------- 下载闸门（供 nginx auth_request 调用） ----------------
+
+    @router.get("/gate/apk")
+    async def gate_apk():
+        """安装包下载闸门。
+
+        nginx 在每个下载地址上用 auth_request 内部调用这里：
+          HTTP 200 -> 放行下载
+          HTTP 403 -> 拒绝
+
+        刻意直接读配置文件、而不是内存里的 cfg：
+        这样面板上改完开关立刻生效，不需要重启服务。
+        """
+        enabled = False
+        try:
+            data = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+            enabled = bool((data.get("panel") or {}).get("apk_download_enabled", False))
+        except Exception as exc:  # 读不出来就按「关闭」处理，安全优先
+            log.warning("读取安装包下载开关失败，按关闭处理: %s", exc)
+
+        if not enabled:
+            raise HTTPException(status_code=403, detail="安装包下载未开启")
+        return JSONResponse({"ok": True, "enabled": True})
 
     # ---------------- 登录 ----------------
 
@@ -237,13 +263,18 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         form = await request.form()
         changes = {}
         for item in SCHEMA:
+            t = item["type"]
+            # 复选框：没提交就代表「未勾选」。
+            # 设置页会把所有 bool 项都渲染成复选框，未勾选的浏览器不会提交，
+            # 所以这里不能沿用「不在表单里就跳过」的逻辑，否则开关只能开、不能关。
+            if t == "bool":
+                raw = form.get(item["path"])
+                changes[item["path"]] = raw is not None and str(raw).lower() in ("on", "true", "1", "yes")
+                continue
             if item["path"] not in form:
                 continue
             raw = form[item["path"]]
-            t = item["type"]
-            if t == "bool":
-                changes[item["path"]] = str(raw).lower() in ("on", "true", "1", "yes")
-            elif t == "int":
+            if t == "int":
                 try:
                     changes[item["path"]] = int(float(str(raw)))
                 except ValueError:
