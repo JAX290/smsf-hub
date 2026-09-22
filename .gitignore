@@ -36,3 +36,5 @@ _local_*
 *.orig
 .DS_Store
 Thumbs.db
+
+.preset_secret
