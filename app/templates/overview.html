@@ -1,18 +1,45 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="apkbar {{ 'on' if apk_download else 'off' }}">
+{% set g = apk_gate %}
+<div class="apkbar {{ 'on' if g.on else 'off' }}">
   <span class="dot"></span>
   <div>
-    <div class="t">安装包下载：{{ '已开启' if apk_download else '已关闭' }}</div>
-    <div class="s">{{ '外部可以下载 APK 安装包' if apk_download else '外部访问下载地址一律拒绝' }}</div>
+    <div class="t">安装包下载：{{ g.text }}</div>
+    <div class="s">{{ g.detail }}</div>
   </div>
-  <form method="post" action="/panel/apk-download/toggle">
-    <button type="submit" class="{{ 'stop' if apk_download else 'go' }}">
-      {{ '点击关闭' if apk_download else '点击开启' }}
-    </button>
+  {% if g.on %}
+  <form method="post" action="/panel/apk-off" style="margin-left:auto">
+    <button type="submit" class="stop">立即关闭</button>
   </form>
+  {% endif %}
+
   <div class="links">
-    下载地址：<code>notic.mulinsen.win/apk1</code> 华为 nova6 · <code>apk2</code> 通用 · <code>apk3</code> 32 位
+    {% if g.on %}
+    <div class="addrs">
+      下载地址：<code>notic.mulinsen.win/apk1</code> 华为 nova6 ·
+      <code>apk2</code> 通用 · <code>apk3</code> 32 位
+    </div>
+    {% endif %}
+    <div class="grants">
+      <form method="post" action="/panel/apk-grant">
+        <input type="hidden" name="mode" value="minutes">
+        <span>开启</span>
+        <input type="number" name="amount" value="10" min="1" max="1440">
+        <span>分钟</span>
+        <button type="submit" class="go">授权</button>
+      </form>
+      <form method="post" action="/panel/apk-grant">
+        <input type="hidden" name="mode" value="times">
+        <span>允许下载</span>
+        <input type="number" name="amount" value="3" min="1" max="999">
+        <span>次</span>
+        <button type="submit" class="go">授权</button>
+      </form>
+      <form method="post" action="/panel/apk-grant">
+        <input type="hidden" name="mode" value="forever">
+        <button type="submit" class="ghost">一直开启</button>
+      </form>
+    </div>
   </div>
 </div>
 {% if archive_stat.level == 'red' %}

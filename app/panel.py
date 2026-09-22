@@ -81,6 +81,86 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             log.warning("读取安装包下载开关失败，按关闭处理: %s", exc)
             return False
 
+    # ---- 安装包下载的临时授权（限时 / 限次）----
+    # 设计意图：开关保持常闭，需要下载时才临时开一小会儿，到期或用完自动关上。
+
+    gate_file = Path(str(cfg.get("panel.apk_gate_file", "./app/data/apk_gate.json")))
+    if not gate_file.is_absolute():
+        gate_file = Path(config_path).parent / gate_file
+
+    def _gate_read() -> dict:
+        try:
+            return json.loads(gate_file.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+
+    def _gate_write(data: dict) -> None:
+        try:
+            gate_file.parent.mkdir(parents=True, exist_ok=True)
+            gate_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            log.warning("写入下载授权状态失败: %s", exc)
+
+    def _set_master(on: bool) -> None:
+        """顺带改掉设置页那个总开关，保证两处显示始终一致。"""
+        update_many(config_path, {"panel.apk_download_enabled": on})
+
+    def gate_state() -> dict:
+        """下载授权的实时状态；已到期/已用完的会顺手关掉并落盘。"""
+        if not apk_download_enabled():
+            return {"on": False, "mode": "off", "text": "已关闭",
+                    "detail": "外部访问下载地址一律拒绝"}
+        st = _gate_read()
+        mode = str(st.get("mode") or "")
+
+        # 状态文件缺失或损坏时按「关闭」处理 —— 常闭优先，绝不能因为文件读不到就放行。
+        if mode not in ("minutes", "times", "forever"):
+            _set_master(False)
+            _gate_write({"mode": "off"})
+            log.warning("下载授权状态缺失或未知（mode=%r），已按关闭处理", mode)
+            return {"on": False, "mode": "off", "text": "已关闭",
+                    "detail": "外部访问下载地址一律拒绝"}
+
+        if mode == "minutes":
+            left = float(st.get("expires_at") or 0) - time.time()
+            if left <= 0:
+                _set_master(False)
+                _gate_write({"mode": "off"})
+                log.info("安装包下载限时授权已到期，自动关闭")
+                return {"on": False, "mode": "off", "text": "已关闭",
+                        "detail": "上次的限时授权已到期，已自动关闭"}
+            return {"on": True, "mode": "minutes", "left_seconds": int(left),
+                    "text": "已开启（限时）",
+                    "detail": "还剩 %d 分 %d 秒，到点自动关闭" % (int(left) // 60, int(left) % 60)}
+
+        if mode == "times":
+            rem = int(st.get("remaining") or 0)
+            if rem <= 0:
+                _set_master(False)
+                _gate_write({"mode": "off"})
+                log.info("安装包下载次数已用完，自动关闭")
+                return {"on": False, "mode": "off", "text": "已关闭",
+                        "detail": "下载次数已用完，已自动关闭"}
+            return {"on": True, "mode": "times", "remaining": rem,
+                    "text": "已开启（限次）", "detail": "还可下载 %d 次，用完自动关闭" % rem}
+
+        return {"on": True, "mode": "forever", "text": "已开启（不限）",
+                "detail": "一直开启，直到手动关闭"}
+
+    def gate_consume() -> dict:
+        """判定一次下载并计数（限次模式下消耗一次）。"""
+        st = gate_state()
+        if st.get("on") and st.get("mode") == "times":
+            data = _gate_read()
+            rem = max(0, int(data.get("remaining") or 0) - 1)
+            data["remaining"] = rem
+            _gate_write(data)
+            st["remaining"] = rem
+            if rem <= 0:
+                _set_master(False)
+                log.info("安装包下载次数用尽，已自动关闭")
+        return st
+
     def guard(request: Request):
         if not auth_on():
             return
@@ -97,7 +177,7 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             "active": kw.pop("active", ""),
             "overview": pipeline.overview(),
             "archive_stat": pipeline.archive.stats(),
-            "apk_download": apk_download_enabled(),
+            "apk_gate": gate_state(),
         }
         base.update(kw)
         return base
@@ -115,17 +195,47 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         刻意直接读配置文件、而不是内存里的 cfg：
         这样面板上改完开关立刻生效，不需要重启服务。
         """
-        if not apk_download_enabled():
+        st = gate_consume()
+        if not st.get("on"):
             raise HTTPException(status_code=403, detail="安装包下载未开启")
-        return JSONResponse({"ok": True, "enabled": True})
+        return JSONResponse({"ok": True, "mode": st.get("mode"), "remaining": st.get("remaining")})
 
-    @router.post("/panel/apk-download/toggle")
-    async def apk_download_toggle(request: Request):
-        """首页那个大开关的提交入口：点一下就在开 / 关之间切换。"""
+    @router.post("/panel/apk-grant")
+    async def apk_grant(request: Request, mode: str = Form(""), amount: str = Form("")):
+        """首页临时授权：开 X 分钟 / 允许 X 次 / 一直开启。"""
         guard(request)
-        now_on = not apk_download_enabled()
-        update_many(config_path, {"panel.apk_download_enabled": now_on})
-        log.info("安装包下载开关改为：%s", "开启" if now_on else "关闭")
+        if mode == "minutes":
+            try:
+                n = max(1, min(1440, int(float(amount or 10))))
+            except (ValueError, TypeError):
+                n = 10
+            _gate_write({"mode": "minutes", "expires_at": time.time() + n * 60,
+                         "granted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            _set_master(True)
+            log.info("安装包下载授权：%d 分钟", n)
+        elif mode == "times":
+            try:
+                n = max(1, min(999, int(float(amount or 3))))
+            except (ValueError, TypeError):
+                n = 3
+            _gate_write({"mode": "times", "remaining": n,
+                         "granted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            _set_master(True)
+            log.info("安装包下载授权：%d 次", n)
+        else:
+            _gate_write({"mode": "forever",
+                         "granted_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            _set_master(True)
+            log.info("安装包下载授权：一直开启")
+        return RedirectResponse("/panel/", status_code=303)
+
+    @router.post("/panel/apk-off")
+    async def apk_off(request: Request):
+        """立即关闭下载入口。"""
+        guard(request)
+        _set_master(False)
+        _gate_write({"mode": "off"})
+        log.info("安装包下载：已手动关闭")
         return RedirectResponse("/panel/", status_code=303)
 
     # ---------------- 登录 ----------------

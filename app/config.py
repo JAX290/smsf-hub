@@ -54,6 +54,8 @@ DEFAULTS: dict[str, Any] = {
         "auth_enabled": False,
         # 安装包（APK）下载总开关。false = 外部访问 apk1/apk2/apk3 一律拒绝。
         "apk_download_enabled": False,
+        # 临时授权的运行时状态（限时/限次），自动生成，一般不用手改。
+        "apk_gate_file": "./app/data/apk_gate.json",
     },
     "log": {
         "level": "INFO",
