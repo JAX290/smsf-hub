@@ -58,6 +58,9 @@ SCHEMA = [
     {"group": "security", "path": "security.extra_token_value", "label": "附加校验请求头值", "type": "str"},
 
     # ---- 面板 ----
+    {"group": "panel", "path": "panel.auth_enabled", "label": "面板要求登录口令", "type": "bool",
+     "hint": "默认关闭。面板只绑 Tailscale IP，由 Tailscale 本身做访问控制。想再加一道口令就打开，并在下面填口令"},
+    {"group": "panel", "path": "panel.password", "label": "面板口令（开启上面开关后才生效）", "type": "str"},
     {"group": "panel", "path": "panel.title", "label": "面板标题", "type": "str"},
     {"group": "panel", "path": "panel.page_size", "label": "每页条数", "type": "int", "min": 10, "max": 500},
     {"group": "panel", "path": "panel.recent_keep", "label": "内存中保留的最近消息数", "type": "int", "min": 50, "max": 10000},

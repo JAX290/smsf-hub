@@ -106,7 +106,12 @@ def create_app(config_path: str | None = None) -> FastAPI:
             kind = "sms"
         payload.setdefault("type", kind)
 
-        result = await pipeline.handle(payload)
+        # 取真实来源 IP（nginx 会设置 X-Real-IP / X-Forwarded-For）
+        fwd = request.headers.get("X-Forwarded-For", "")
+        real_ip = request.headers.get("X-Real-IP", "") or (fwd.split(",")[0].strip() if fwd else "")
+        client_ip = real_ip or (request.client.host if request.client else "")
+
+        result = await pipeline.handle(payload, client_ip)
         return JSONResponse(result)
 
     @app.post("/smsf/hook")

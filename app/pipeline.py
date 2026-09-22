@@ -12,6 +12,7 @@ from pathlib import Path
 from .archive import Archive
 from .channels import build_channels, dispatch
 from .dedup import Dedup
+from .devices import DeviceRegistry
 from .merge import Merger
 from .models import Incoming
 
@@ -50,6 +51,9 @@ class Pipeline:
         self._recent_lock = threading.Lock()
         self._load_recent(keep)
         self._recent_lines = self._count_lines()
+
+        df = str(cfg.get("panel.devices_file", "./app/data/devices.json"))
+        self.devices = DeviceRegistry(Path(df) if os.path.isabs(df) else (Path(cfg.path).parent / df).resolve())
         self.stats = {
             "received": 0,
             "duplicates": 0,
@@ -104,9 +108,17 @@ class Pipeline:
 
     # ---------- 入口 ----------
 
-    async def handle(self, payload: dict) -> dict:
+    async def handle(self, payload: dict, source_ip: str = "") -> dict:
         msg = Incoming.from_payload(payload)
         self.stats["received"] += 1
+
+        # 登记手机（首次出现自动编号）
+        try:
+            rec = self.devices.touch(msg.device, source_ip)
+            self.stats["devices"] = self.devices.count()
+            msg.device = rec.get("remark") or rec["label"]
+        except Exception:
+            log.exception("手机登记失败")
 
         if self.dedup.seen(msg):
             self.stats["duplicates"] += 1
@@ -167,6 +179,10 @@ class Pipeline:
     def overview(self) -> dict:
         return {
             "stats": dict(self.stats),
+            "devices": {
+                "total": self.devices.count(),
+                "online": self.devices.online_count(300),
+            },
             "archive": self.archive.stats(),
             "pending_merge": self.merger.pending(),
             "dedup_size": self.dedup.size(),

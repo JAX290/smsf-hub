@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>手机管理</h2>
+  <p class="hint">
+    每台手机第一次上报时会自动登记并编号。想区分它们，只需要在 APK 里预置的设备 ID 生效
+    （手机端不需要你填任何东西）。备注名改完后，消息列表和归档里都会用备注名显示。
+  </p>
+  <div class="grid" style="margin-top:12px">
+    <div class="stat"><div class="k">已登记手机</div><div class="v">{{ total }}</div></div>
+    <div class="stat"><div class="k">最近 5 分钟在线</div><div class="v">{{ online }}</div></div>
+  </div>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr><th>编号</th><th>备注名</th><th>标识</th><th>上报次数</th><th>最近上报</th><th>最近来源 IP</th><th>操作</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><span class="badge b-ok">{{ r.label }}</span></td>
+      <td>
+        <form method="post" action="/panel/devices/rename" class="row">
+          <input type="hidden" name="key" value="{{ r.key }}">
+          <input type="text" name="remark" value="{{ r.remark }}" placeholder="{{ r.label }}" style="max-width:180px">
+          <button type="submit" style="padding:6px 10px">保存</button>
+        </form>
+      </td>
+      <td><code style="font-size:11px">{{ r.key[:28] }}{% if r.key|length > 28 %}…{% endif %}</code></td>
+      <td>{{ r.count }}</td>
+      <td style="white-space:nowrap">{{ r.last_seen }}</td>
+      <td>{{ r.last_ip or '-' }}</td>
+      <td>
+        <form method="post" action="/panel/devices/remove" onsubmit="return confirm('确认删除「{{ r.display }}」的记录？')">
+          <input type="hidden" name="key" value="{{ r.key }}">
+          <button class="ghost" type="submit" style="padding:6px 10px">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>还没有手机上报过。等手机上配置好之后，这里会自动出现「手机1」。</p>
+  {% endif %}
+</div>
+{% endblock %}

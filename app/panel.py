@@ -59,12 +59,18 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
     router = APIRouter()
     config_path = str(cfg.path)
 
+    def auth_on() -> bool:
+        """面板是否要求口令。默认关闭——面板只绑 Tailscale IP，由 Tailscale 做访问控制。"""
+        return bool(cfg.get("panel.auth_enabled", False))
+
     def password() -> str:
         return str(cfg.get("panel.password", "") or "")
 
     def guard(request: Request):
+        if not auth_on():
+            return
         if not password():
-            raise HTTPException(status_code=503, detail="面板未设置密码，请在 config.yaml 里填写 panel.password 后重启服务")
+            raise HTTPException(status_code=503, detail="已开启面板口令但未设置 panel.password，请在 config.yaml 里填写后重启服务")
         if not _is_authed(request, password()):
             raise HTTPException(status_code=401, detail="未登录")
 
@@ -88,6 +94,8 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
 
     @router.get("/panel/", response_class=HTMLResponse)
     async def home(request: Request):
+        if not auth_on():
+            return templates.TemplateResponse("overview.html", ctx(request, active="overview"))
         if not password():
             return templates.TemplateResponse("login.html", ctx(request, need_setup=True))
         if not _is_authed(request, password()):
@@ -133,6 +141,32 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         page_rows = rows[(page - 1) * size: page * size]
         return templates.TemplateResponse("messages.html", ctx(
             request, active="messages", rows=page_rows, q=q, page=page, pages=pages, total=total))
+
+    # ---------------- 手机管理 ----------------
+
+    @router.get("/panel/devices", response_class=HTMLResponse)
+    async def devices_page(request: Request):
+        guard(request)
+        rows = pipeline.devices.all()
+        online5 = pipeline.devices.online_count(300)
+        return templates.TemplateResponse("devices.html", ctx(
+            request, active="devices", rows=rows, total=len(rows), online=online5))
+
+    @router.post("/panel/devices/rename")
+    async def devices_rename(request: Request, key: str = Form(""), remark: str = Form("")):
+        guard(request)
+        ok = pipeline.devices.rename(key, remark.strip())
+        return templates.TemplateResponse("saved.html", ctx(
+            request, active="devices", changed=[key] if ok else [],
+            note=("备注名已保存为「%s」" % remark) if ok else "没找到这台手机"))
+
+    @router.post("/panel/devices/remove")
+    async def devices_remove(request: Request, key: str = Form("")):
+        guard(request)
+        ok = pipeline.devices.remove(key)
+        return templates.TemplateResponse("saved.html", ctx(
+            request, active="devices", changed=[],
+            note="已删除该手机记录（下次它上报会重新登记为新的一台）" if ok else "没找到这台手机"))
 
     # ---------------- 归档 ----------------
 

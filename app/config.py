@@ -47,6 +47,11 @@ DEFAULTS: dict[str, Any] = {
         "recent_keep": 500,
         # 最近消息落盘文件：重启服务后列表不会丢
         "recent_file": "./app/data/recent.jsonl",
+        # 手机注册表（自动登记上报过的手机）
+        "devices_file": "./app/data/devices.json",
+        # 面板是否要求登录口令。默认 false —— 面板只绑 Tailscale IP，
+        # 由 Tailscale 本身做访问控制。想加一道口令就改成 true。
+        "auth_enabled": False,
     },
     "log": {
         "level": "INFO",

@@ -21,6 +21,15 @@
 </div>
 
 <div class="card">
+  <h2>手机</h2>
+  <div class="row">
+    <b style="font-size:18px">{{ overview.devices.total }} 台默认手机已上线</b>
+    <span class="hint">（最近 5 分钟在线 {{ overview.devices.online }} 台）</span>
+    <a href="/panel/devices" style="margin-left:auto;padding:6px 12px;border:1px solid var(--line);border-radius:6px">管理 / 改备注名</a>
+  </div>
+</div>
+
+<div class="card">
   <h2>归档占用</h2>
   <div class="row"><b>{{ archive_stat.used_mb }} MB</b><span class="hint">/ 上限 {{ archive_stat.limit_mb }} MB（{{ archive_stat.percent }}%）</span></div>
   <div class="bar"><i style="width:{{ [archive_stat.percent, 100] | min }}%; background:{{ 'var(--bad)' if archive_stat.level=='red' else ('var(--warn)' if archive_stat.level=='yellow' else 'var(--ok)') }}"></i></div>
