@@ -14,7 +14,7 @@ DEFAULTS: dict[str, Any] = {
         "panel_host": "127.0.0.1",
         "panel_port": 8790,
         "public_base_url": "",
-        "phone_base_url": "https://relay1.mulinsen.win/smsf/hook",
+        "phone_base_url": "https://notic.mulinsen.win/smsf/hook",
     },
     "security": {
         "secret": "",

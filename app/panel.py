@@ -329,7 +329,7 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             "ts": timestamp,
             "sign": urllib.parse.quote(sign, safe=""),
         }
-        base = cfg.get("server.phone_base_url", "https://relay1.mulinsen.win/smsf/hook")
+        base = cfg.get("server.phone_base_url", "https://notic.mulinsen.win/smsf/hook")
         urls = {
             "短信": base + "/sms",
             "来电": base + "/call",
