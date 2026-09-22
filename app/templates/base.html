@@ -49,6 +49,22 @@
   .banner { border-radius:10px; padding:12px 14px; margin-bottom:14px; }
   .banner.red { background:rgba(239,68,68,.12); border:1px solid var(--bad); }
   .banner.yellow { background:rgba(234,179,8,.12); border:1px solid var(--warn); }
+  /* 首页顶部的安装包下载总开关 */
+  .apkbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+            border-radius:12px; padding:16px 18px; margin-bottom:16px;
+            border:1px solid var(--line); background:var(--card); }
+  .apkbar.on  { border-color:var(--ok);  background:rgba(34,197,94,.10); }
+  .apkbar.off { border-color:var(--bad); background:rgba(239,68,68,.10); }
+  .apkbar .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .apkbar.on  .dot { background:var(--ok);  box-shadow:0 0 0 5px rgba(34,197,94,.20); }
+  .apkbar.off .dot { background:var(--bad); box-shadow:0 0 0 5px rgba(239,68,68,.20); }
+  .apkbar .t { font-size:17px; font-weight:700; }
+  .apkbar .s { font-size:12px; color:var(--dim); margin-top:2px; }
+  .apkbar form { margin-left:auto; }
+  .apkbar button { padding:10px 22px; font-size:14px; font-weight:600; }
+  .apkbar button.go { background:var(--ok); }
+  .apkbar button.stop { background:var(--bad); }
+  .apkbar .links { width:100%; font-size:12px; color:var(--dim); border-top:1px solid var(--line); padding-top:10px; }
 </style>
 </head>
 <body>

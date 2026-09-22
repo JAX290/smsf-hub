@@ -68,6 +68,19 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
     def password() -> str:
         return str(cfg.get("panel.password", "") or "")
 
+    def apk_download_enabled() -> bool:
+        """安装包下载总开关。
+
+        刻意直接读配置文件、而不是内存里的 cfg：
+        这样面板上改完立刻生效，不需要重启服务。
+        """
+        try:
+            data = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+            return bool((data.get("panel") or {}).get("apk_download_enabled", False))
+        except Exception as exc:  # 读不出来按「关闭」处理，安全优先
+            log.warning("读取安装包下载开关失败，按关闭处理: %s", exc)
+            return False
+
     def guard(request: Request):
         if not auth_on():
             return
@@ -84,6 +97,7 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             "active": kw.pop("active", ""),
             "overview": pipeline.overview(),
             "archive_stat": pipeline.archive.stats(),
+            "apk_download": apk_download_enabled(),
         }
         base.update(kw)
         return base
@@ -101,16 +115,18 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         刻意直接读配置文件、而不是内存里的 cfg：
         这样面板上改完开关立刻生效，不需要重启服务。
         """
-        enabled = False
-        try:
-            data = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
-            enabled = bool((data.get("panel") or {}).get("apk_download_enabled", False))
-        except Exception as exc:  # 读不出来就按「关闭」处理，安全优先
-            log.warning("读取安装包下载开关失败，按关闭处理: %s", exc)
-
-        if not enabled:
+        if not apk_download_enabled():
             raise HTTPException(status_code=403, detail="安装包下载未开启")
         return JSONResponse({"ok": True, "enabled": True})
+
+    @router.post("/panel/apk-download/toggle")
+    async def apk_download_toggle(request: Request):
+        """首页那个大开关的提交入口：点一下就在开 / 关之间切换。"""
+        guard(request)
+        now_on = not apk_download_enabled()
+        update_many(config_path, {"panel.apk_download_enabled": now_on})
+        log.info("安装包下载开关改为：%s", "开启" if now_on else "关闭")
+        return RedirectResponse("/panel/", status_code=303)
 
     # ---------------- 登录 ----------------
 

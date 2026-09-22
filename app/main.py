@@ -67,6 +67,17 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app.state.cfg = cfg
     app.state.pipeline = pipeline
 
+    @app.middleware("http")
+    async def _panel_no_cache(request: Request, call_next):
+        """面板页面禁用浏览器缓存。
+
+        改完设置刷新就能看到最新状态，不会因为缓存看到旧页面。
+        """
+        resp = await call_next(request)
+        if request.url.path.startswith("/panel"):
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
     # ---------------- 手机上报 ----------------
 
     async def _ingest(request: Request, kind: str | None) -> JSONResponse:

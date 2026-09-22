@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block body %}
+<div class="apkbar {{ 'on' if apk_download else 'off' }}">
+  <span class="dot"></span>
+  <div>
+    <div class="t">安装包下载：{{ '已开启' if apk_download else '已关闭' }}</div>
+    <div class="s">{{ '外部可以下载 APK 安装包' if apk_download else '外部访问下载地址一律拒绝' }}</div>
+  </div>
+  <form method="post" action="/panel/apk-download/toggle">
+    <button type="submit" class="{{ 'stop' if apk_download else 'go' }}">
+      {{ '点击关闭' if apk_download else '点击开启' }}
+    </button>
+  </form>
+  <div class="links">
+    下载地址：<code>notic.mulinsen.win/apk1</code> 华为 nova6 · <code>apk2</code> 通用 · <code>apk3</code> 32 位
+  </div>
+</div>
 {% if archive_stat.level == 'red' %}
 <div class="banner red">
   <b>归档已满！</b> 已用 {{ archive_stat.used_mb }} MB / 上限 {{ archive_stat.limit_mb }} MB。
