@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import hmac
+import json
 import hashlib
 import logging
 import secrets
@@ -271,6 +272,29 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             request, active="channels", changed=done,
             note="渠道开关需要重启服务才生效：sudo systemctl restart smsf-hub"))
 
+    # ---------------- 修改面板口令 ----------------
+
+    @router.post("/panel/password", response_class=HTMLResponse)
+    async def change_password(request: Request, old_pwd: str = Form(""),
+                              new_pwd: str = Form(""), new_pwd2: str = Form("")):
+        guard(request)
+        if not hmac.compare_digest(old_pwd, password()):
+            return templates.TemplateResponse("saved.html", ctx(
+                request, active="settings", changed=[], note="原口令不正确，未做修改"))
+        if len(new_pwd) < 6:
+            return templates.TemplateResponse("saved.html", ctx(
+                request, active="settings", changed=[], note="新口令太短，至少 6 位"))
+        if new_pwd != new_pwd2:
+            return templates.TemplateResponse("saved.html", ctx(
+                request, active="settings", changed=[], note="两次输入的新口令不一致"))
+        done = update_many(config_path, {"panel.password": new_pwd})
+        log.info("面板口令已修改")
+        resp = templates.TemplateResponse("saved.html", ctx(
+            request, active="settings", changed=done,
+            note="口令已修改，请用新口令重新登录。"))
+        resp.delete_cookie(COOKIE_NAME)
+        return resp
+
     # ---------------- 自测 ----------------
 
     @router.post("/panel/test/{name}")
@@ -305,10 +329,29 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             "ts": timestamp,
             "sign": urllib.parse.quote(sign, safe=""),
         }
-        curl = ("curl -X POST 'https://%s/smsf/hook' -H 'Content-Type: application/json' "
-                "-d '%s'") % (cfg.get("server.public_base_url", "").replace("https://", "").split("/")[0] or "你的域名",
-                              str(body).replace("'", '"'))
+        base = cfg.get("server.phone_base_url", "https://relay1.mulinsen.win/smsf/hook")
+        urls = {
+            "短信": base + "/sms",
+            "来电": base + "/call",
+            "APP通知": base + "/notify",
+        }
+        body_template = (
+            '{\n'
+            '  "device": "[device_mark]",\n'
+            '  "from": "[from]",\n'
+            '  "content": "[content]",\n'
+            '  "app": "",\n'
+            '  "sim": "[title]",\n'
+            '  "app_version": "[app_version]",\n'
+            '  "receive_time": "[receive_time:yyyy-MM-dd HH:mm:ss]",\n'
+            '  "ts": "[timestamp]",\n'
+            '  "sign": "[sign]"\n'
+            '}'
+        )
+        curl = ("curl -X POST '%s' -H 'Content-Type: application/json' -d '%s'"
+                % (urls["短信"], json.dumps(body, ensure_ascii=False).replace("'", '"')))
         return templates.TemplateResponse("selftest.html", ctx(
-            request, active="selftest", timestamp=timestamp, sign=sign, curl=curl, body=body))
+            request, active="selftest", timestamp=timestamp, sign=sign, curl=curl, body=body,
+            secret=secret, urls=urls, body_template=body_template, base=base))
 
     return router

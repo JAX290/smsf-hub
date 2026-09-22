@@ -42,4 +42,17 @@
     <span class="hint">保存后部分参数需要重启服务：<code>sudo systemctl restart smsf-hub</code></span>
   </div>
 </form>
+
+<div class="card">
+  <h2>修改面板登录口令</h2>
+  <p class="hint">改完会立刻退出登录，需要用新口令重新进来。这个口令只用于打开本面板（你的 Tailscale 网络内），和手机端的 secret 是两回事。</p>
+  <form method="post" action="/panel/password">
+    <table>
+      <tr><th style="width:36%">当前口令</th><td><input type="password" name="old_pwd" autocomplete="current-password"></td></tr>
+      <tr><th>新口令<div class="hint">至少 6 位</div></th><td><input type="password" name="new_pwd" autocomplete="new-password"></td></tr>
+      <tr><th>再输一次新口令</th><td><input type="password" name="new_pwd2" autocomplete="new-password"></td></tr>
+    </table>
+    <div style="margin-top:12px"><button type="submit">修改口令</button></div>
+  </form>
+</div>
 {% endblock %}

@@ -1,26 +1,55 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="card">
-  <h2>自测：验证手机端配置是否正确</h2>
-  <p class="hint">下面是用你服务器的 secret 现算出来的一条合法请求。你可以在服务器上执行它，
-     验证整条链路（签名 → 接收 → 归档 → 推送）是否通。</p>
+  <h2>手机端配置（照着填就行）</h2>
+  <p class="hint">在手机的 SmsForwarder 里新建「发送通道 → Webhook」。建议按类型建三个，这样服务端能区分短信/来电/通知。</p>
+
+  <h3 style="font-size:14px;margin:16px 0 6px">① 上报地址（每个类型一个）</h3>
+  <table>
+    {% for label, url in urls.items() %}
+    <tr><th style="width:22%">{{ label }}</th><td><code>{{ url }}</code></td></tr>
+    {% endfor %}
+  </table>
+
+  <h3 style="font-size:14px;margin:16px 0 6px">② 其它字段</h3>
+  <table>
+    <tr><th style="width:22%">请求方式</th><td><code>POST</code></td></tr>
+    <tr><th>secret</th><td><code>{{ secret }}</code>
+      <div class="hint">就是这个。填到 SmsForwarder 的「secret」框里，服务端用它验签。改这里就要改手机。</div></td></tr>
+    <tr><th>headers</th><td><code>{"Content-Type": "application/json"}</code>
+      <div class="hint">⚠️ 必须填，否则服务端收不到 JSON</div></td></tr>
+  </table>
+
+  <h3 style="font-size:14px;margin:16px 0 6px">③ webParams（请求体模板，直接抄）</h3>
+  <pre>{{ body_template }}</pre>
+  <p class="hint">方括号里的是 SmsForwarder 的变量，它发送时会自动替换。<br>
+     APP通知那条建议把 <code>"app"</code> 填成 <code>[title]</code> 或应用名，这样归档能按应用分目录。</p>
+</div>
+
+<div class="card">
+  <h2>自测：验证链路是否通</h2>
+  <p class="hint">下面是刚用你服务器的 secret 现算的一条合法请求。</p>
   <table>
     <tr><th>时间戳 ts</th><td><code>{{ timestamp }}</code></td></tr>
-    <tr><th>签名 sign</th><td><code>{{ sign }}</code></td></tr>
+    <tr><th>签名 sign</th><td style="word-break:break-all"><code>{{ sign }}</code></td></tr>
   </table>
 </div>
 
 <div class="card">
-  <h2>直接在本机测试（推荐先跑这个）</h2>
-  <p class="hint">在服务器上执行，绕开域名和 Cloudflare，直接测服务本身：</p>
-  <pre>curl -s -X POST http://127.0.0.1:8701/smsf/hook \
+  <h2>在服务器上跑这条命令，即可验证全链路</h2>
+  <p class="hint">绕开手机，直接模拟一次上报。成功会返回 <code>{"status":"ok"}</code>。</p>
+  <pre>curl -s -X POST {{ base }}/sms \
   -H 'Content-Type: application/json' \
   -d '{"type":"sms","device":"自测","from":"10086","content":"自测消息","ts":"{{ timestamp }}","sign":"{{ sign | urlencode }}"}'</pre>
 </div>
 
 <div class="card">
-  <h2>走公网域名测试（验证 Cloudflare + nginx）</h2>
-  <pre>{{ curl }}</pre>
-  <p class="hint">如果这条失败而上面那条成功，说明问题在 Cloudflare 或 nginx 这一层。</p>
+  <h2>如果你改了 secret，用这条重新生成</h2>
+  <pre>cd /opt/smsf-hub
+SECRET=$(grep -m1 '^  secret:' config.yaml | sed 's/.*"\(.*\)".*/\1/')
+TS=$(date +%s)000
+SIGN=$(printf "%s\n%s" "$TS" "$SECRET" | openssl dgst -sha256 -hmac "$SECRET" -binary | base64)
+curl -s -X POST {{ base }}/sms -H 'Content-Type: application/json' \
+  -d "{\"type\":\"sms\",\"from\":\"10086\",\"content\":\"test\",\"ts\":\"$TS\",\"sign\":\"$SIGN\"}"</pre>
 </div>
 {% endblock %}

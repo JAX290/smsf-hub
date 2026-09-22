@@ -25,6 +25,9 @@ server:
 
   # 生成「下载归档」链接时用的外部地址（填你的域名或 Tailscale 地址）
   public_base_url: "https://status2.mulinsen.win/smsf"
+  # ⚠️ 手机端要填的上报地址前缀（会显示在面板的「自测/手机配置」页里）
+  # 这是 DNS 直连源站的域名，不走 Cloudflare
+  phone_base_url: "https://relay1.mulinsen.win/smsf/hook"
   # 面板地址（只给你的 Tailscale 用）
   panel_url: "http://100.118.119.84:8702"
 
