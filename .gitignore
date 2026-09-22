@@ -43,3 +43,4 @@ Thumbs.db
 .apk_hashes.json
 upload_apk.log
 deploy/_dl_index.html
+.dl_short
