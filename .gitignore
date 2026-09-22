@@ -38,3 +38,8 @@ _local_*
 Thumbs.db
 
 .preset_secret
+
+.dl_rand
+.apk_hashes.json
+upload_apk.log
+deploy/_dl_index.html
