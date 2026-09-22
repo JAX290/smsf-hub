@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+  :root { --bg:#0f1720; --card:#18222e; --line:#26333f; --txt:#e6edf3; --dim:#8b9bab;
+          --accent:#3b82f6; --ok:#22c55e; --warn:#eab308; --bad:#ef4444; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; font-size:14px; }
+  a { color:var(--accent); text-decoration:none; }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px;
+           display:flex; flex-wrap:wrap; gap:14px; align-items:center; position:sticky; top:0; z-index:9; }
+  header .brand { font-weight:700; margin-right:8px; }
+  header nav a { padding:6px 10px; border-radius:6px; color:var(--dim); }
+  header nav a.active { background:var(--accent); color:#fff; }
+  header .right { margin-left:auto; color:var(--dim); font-size:12px; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .card h2 { margin:0 0 10px; font-size:15px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .stat .k { color:var(--dim); font-size:12px; }
+  .stat .v { font-size:20px; font-weight:700; margin-top:4px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  code,pre { background:#0b1118; border:1px solid var(--line); border-radius:6px; padding:2px 5px;
+             font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+  pre { padding:10px; overflow:auto; }
+  input[type=text],input[type=number],input[type=password],select {
+    width:100%; padding:7px 9px; border-radius:6px; border:1px solid var(--line);
+    background:#0b1118; color:var(--txt); font-size:13px; }
+  label.chk { display:flex; align-items:center; gap:7px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px;
+           padding:8px 14px; cursor:pointer; font-size:13px; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+  .hint { color:var(--dim); font-size:12px; margin-top:3px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; }
+  .b-ok { background:rgba(34,197,94,.15); color:var(--ok); }
+  .b-off { background:rgba(139,155,171,.15); color:var(--dim); }
+  .b-warn { background:rgba(234,179,8,.15); color:var(--warn); }
+  .b-bad { background:rgba(239,68,68,.15); color:var(--bad); }
+  .bar { height:8px; background:#0b1118; border-radius:99px; overflow:hidden; margin-top:6px; }
+  .bar > i { display:block; height:100%; background:var(--ok); }
+  .banner { border-radius:10px; padding:12px 14px; margin-bottom:14px; }
+  .banner.red { background:rgba(239,68,68,.12); border:1px solid var(--bad); }
+  .banner.yellow { background:rgba(234,179,8,.12); border:1px solid var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">{{ title }}</span>
+  <nav>
+    <a href="/panel/overview" class="{{ 'active' if active=='overview' else '' }}">总览</a>
+    <a href="/panel/messages" class="{{ 'active' if active=='messages' else '' }}">消息流</a>
+    <a href="/panel/archive" class="{{ 'active' if active=='archive' else '' }}">归档</a>
+    <a href="/panel/channels" class="{{ 'active' if active=='channels' else '' }}">推送渠道</a>
+    <a href="/panel/settings" class="{{ 'active' if active=='settings' else '' }}">参数设置</a>
+    <a href="/panel/selftest" class="{{ 'active' if active=='selftest' else '' }}">自测</a>
+  </nav>
+  <span class="right">{{ now }} &nbsp; <a href="/panel/logout">退出</a></span>
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

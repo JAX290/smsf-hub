@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>自测：验证手机端配置是否正确</h2>
+  <p class="hint">下面是用你服务器的 secret 现算出来的一条合法请求。你可以在服务器上执行它，
+     验证整条链路（签名 → 接收 → 归档 → 推送）是否通。</p>
+  <table>
+    <tr><th>时间戳 ts</th><td><code>{{ timestamp }}</code></td></tr>
+    <tr><th>签名 sign</th><td><code>{{ sign }}</code></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>直接在本机测试（推荐先跑这个）</h2>
+  <p class="hint">在服务器上执行，绕开域名和 Cloudflare，直接测服务本身：</p>
+  <pre>curl -s -X POST http://127.0.0.1:8701/smsf/hook \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"sms","device":"自测","from":"10086","content":"自测消息","ts":"{{ timestamp }}","sign":"{{ sign | urlencode }}"}'</pre>
+</div>
+
+<div class="card">
+  <h2>走公网域名测试（验证 Cloudflare + nginx）</h2>
+  <pre>{{ curl }}</pre>
+  <p class="hint">如果这条失败而上面那条成功，说明问题在 Cloudflare 或 nginx 这一层。</p>
+</div>
+{% endblock %}

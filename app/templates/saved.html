@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>操作结果</h2>
+  {% if changed %}
+    <p>已修改 {{ changed | length }} 项：</p>
+    <ul>{% for c in changed %}<li><code>{{ c }}</code></li>{% endfor %}</ul>
+  {% endif %}
+  {% if note %}<p>{{ note }}</p>{% endif %}
+  <div class="row">
+    <a href="/panel/channels" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">返回渠道</a>
+    <a href="/panel/settings" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">返回参数</a>
+    <a href="/panel/overview" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">返回总览</a>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,208 @@
+# ==============================================================================
+#  SmsForwarder Hub —— 配置总表
+# ------------------------------------------------------------------------------
+#  【这就是你的操作界面】
+#  所有可调参数都在这个文件里。你不用懂代码 ——
+#  想改什么，直接跟我说「把合并窗口改成 120 秒」这种话，我改这里并重启服务。
+#  每一行后面的注释就是这个参数在说什么。看不懂的不要紧，大部分不用动。
+#
+#  改完必须重启服务才生效：  sudo systemctl restart smsf-hub
+# ==============================================================================
+
+server:
+  # 手机上报入口。
+  # ⚠️ 只绑 127.0.0.1 —— 外部必须经过 nginx 反代，公网无法直接访问这个端口。
+  # 手机实际填的地址是： https://status2.mulinsen.win/smsf/hook
+  listen_host: "127.0.0.1"
+  listen_port: 8701
+  # nginx 反代时的路径前缀（要和 /etc/nginx 里配的一致）
+  url_prefix: "/smsf"
+
+  # 控制面板。⚠️ 只绑 Tailscale IP —— 只有你自己的 Tailscale 网络能打开。
+  # 8789 / 8790 都被你其它项目占用，8701-8710 实测全空闲。
+  panel_host: "100.118.119.84"
+  panel_port: 8702
+
+  # 生成「下载归档」链接时用的外部地址（填你的域名或 Tailscale 地址）
+  public_base_url: "https://status2.mulinsen.win/smsf"
+  # 面板地址（只给你的 Tailscale 用）
+  panel_url: "http://100.118.119.84:8702"
+
+# ------------------------------------------------------------------------------
+# 安全：手机与服务端之间的鉴权
+# ------------------------------------------------------------------------------
+security:
+  # 和手机上 SmsForwarder 里填的 secret 必须完全一致。改这里也要改手机。
+  # 要求：至少 32 位随机字符。生成方法（服务器上执行）：
+  #   openssl rand -hex 32
+  secret: "请改成你自己的长随机串_至少32位"
+
+  # 时间戳允许的误差范围（秒）。超过范围的上报直接拒绝，防止别人重放旧报文。
+  timestamp_tolerance_seconds: 300
+
+  # 可选：再加一道自定义请求头校验（手机 headers 里填同样的）
+  extra_token_header: ""
+  extra_token_value: ""
+
+# ------------------------------------------------------------------------------
+# 去重：同样的内容短时间内重复上报，只处理一次
+# ------------------------------------------------------------------------------
+dedup:
+  enable: true
+  window_seconds: 60        # 60 秒内，同样的「来源+发件人+内容」只算一次
+  max_entries: 5000         # 内存中最多记住多少条指纹
+
+# ------------------------------------------------------------------------------
+# 合并发送：短时间内多条消息合并成一条再推送（避免刷屏，也绕开渠道限流）
+# ------------------------------------------------------------------------------
+merge:
+  enable: true
+  window_seconds: 60        # 合并窗口。60 秒内的消息攒一起发。想更实时就改小，比如 15
+  max_items: 20             # 一条合并消息最多含几条。超过就立刻发出，剩下的重新攒
+  group_by: "subject"       # 按什么分组：subject(来源主题) / app(App名) / none(全部混在一起)
+  separator: "\n---\n"     # 合并时消息之间的分隔线
+
+# ------------------------------------------------------------------------------
+# 归档：把收到的消息存成 Markdown 文件
+# ------------------------------------------------------------------------------
+archive:
+  enable: true
+  root: "/opt/smsf-hub/app/data/archive"
+  # 目录结构： 类型 / 主题 / 日期.md
+  #   例：    短信/1069xxxx/2026-09-22.md
+  #           APP通知/微信/2026-09-22.md
+  #           来电/13800138000/2026-09-22.md
+  # 「主题」取什么值，见下面 subject_rules
+  subject_rules:
+    sms: "sender"           # 短信：按发件人号码分主题
+    call: "sender"          # 来电：按来电号码分主题
+    notify: "app"            # APP通知：按应用名分主题
+
+  # 单文件大小上限（MB）。超过就滚动成 2026-09-22.part2.md，避免一个文件无限变大
+  file_max_mb: 5
+
+  # 归档总量上限（MB）。超过就在面板首页报警并提示打包下载
+  total_max_mb: 512
+
+  # 触发提醒的阈值（占 total_max_mb 的百分比）。到 80% 就变黄，到 100% 变红
+  warn_percent: 80
+
+  # 单条消息内容太长时截断（字符）。0 = 不截断
+  content_max_chars: 4000
+
+# ------------------------------------------------------------------------------
+# 推送渠道：手机只发到一个地址，这里想开几个开几个
+# 填了 token/url 的才会启用；留空表示不启用
+# ------------------------------------------------------------------------------
+channels:
+  # 企业微信群机器人（注意：官方限 20 条/分钟，靠上面的 merge 合并来规避）
+  wework_robot:
+    enable: false
+    webhook: ""
+    msgtype: "markdown"     # text 或 markdown
+    at_all: false
+    at_mobiles: ""
+
+  # 企业微信应用消息（需要企业管理员建自建应用）
+  wework_agent:
+    enable: false
+    corp_id: ""
+    agent_id: ""
+    secret: ""
+    to_user: "@all"
+
+  # 钉钉群机器人
+  dingtalk_robot:
+    enable: false
+    webhook: ""
+    secret: ""              # 钉钉的加签密钥
+    at_all: false
+    at_mobiles: ""
+
+  # 飞书群机器人
+  feishu_robot:
+    enable: false
+    webhook: ""
+    secret: ""
+
+  # Telegram 机器人（服务器需要能访问 api.telegram.org）
+  telegram:
+    enable: false
+    bot_token: ""
+    chat_id: ""
+    api_base: "https://api.telegram.org"
+
+  # Bark（推送到你的 iPhone）
+  bark:
+    enable: false
+    server: "https://api.day.app"
+    device_key: ""
+    group: "短信转发"
+    sound: ""
+
+  # ntfy（可自建）
+  ntfy:
+    enable: false
+    server: "https://ntfy.sh"
+    topic: ""
+    token: ""
+
+  # Gotify（自建）
+  gotify:
+    enable: false
+    server: ""
+    token: ""
+    priority: 5
+
+  # PushPlus
+  pushplus:
+    enable: false
+    token: ""
+    topic: ""
+
+  # Server酱
+  serverchan:
+    enable: false
+    send_key: ""
+
+  # 邮件
+  smtp:
+    enable: false
+    host: ""
+    port: 465
+    ssl: true
+    username: ""
+    password: ""
+    mail_from: ""
+    mail_to: ""
+    subject_prefix: "[短信转发]"
+
+  # 通用 Webhook（自己接别的系统用）
+  webhook:
+    enable: false
+    url: ""
+    method: "POST"
+    headers: {}
+    body_template: '{"title":"[title]","content":"[content]","from":"[from]","device":"[device]","time":"[time]"}'
+
+# ------------------------------------------------------------------------------
+# 面板与日志
+# ------------------------------------------------------------------------------
+panel:
+  title: "短信转发中枢"
+  # 面板登录口令（Tailscale 之外再加一道）
+  password: "请改成你自己的口令"
+  # 每页显示多少条记录
+  page_size: 50
+  # 面板上"最近消息"保留多少条
+  recent_keep: 500
+
+  # 最近消息落盘文件（重启服务后列表不会丢）。
+  # 相对路径相对于 config.yaml 所在目录。
+  recent_file: "./app/data/recent.jsonl"
+
+log:
+  level: "INFO"             # DEBUG / INFO / WARNING / ERROR
+  file: "/opt/smsf-hub/app/data/logs/hub.log"
+  max_mb: 20                # 日志轮转大小
+  backup_count: 5

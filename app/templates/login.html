@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card" style="max-width:420px;margin:40px auto;">
+  <h2>登录</h2>
+  {% if need_setup %}
+    <p>面板还没有设置口令。</p>
+    <p class="hint">请在服务器上编辑配置文件的 <code>panel.password</code>，然后重启服务：<br>
+      <code>sudo nano /opt/smsf-hub/config.yaml</code><br>
+      <code>sudo systemctl restart smsf-hub</code></p>
+  {% else %}
+    {% if error %}<p style="color:var(--bad)">{{ error }}</p>{% endif %}
+    <form method="post" action="/panel/login">
+      <input type="password" name="pwd" placeholder="请输入面板口令" autofocus>
+      <div style="margin-top:12px"><button type="submit">进入</button></div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+# ==============================================================================
+#  这些绝不能进公开仓库
+# ==============================================================================
+
+# 真实配置（含 secret / webhook / token / 面板口令）
+config.yaml
+config.*.yaml
+!config.example.yaml
+
+# 归档数据（含短信正文，属于你个人隐私）
+app/data/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志
+*.log
+logs/
+
+# 本地开发环境
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 本地工具与临时文件
+_*.py
+_*.sh
+deploy/_*.sh
+deploy/_remote.py
+_local_*
+*.bak
+*.orig
+.DS_Store
+Thumbs.db

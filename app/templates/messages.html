@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>消息流（共 {{ total }} 条，第 {{ page }}/{{ pages }} 页）</h2>
+  <form method="get" action="/panel/messages" class="row">
+    <input type="text" name="q" value="{{ q }}" placeholder="搜索内容 / 号码 / 应用名" style="max-width:320px">
+    <button type="submit">搜索</button>
+    {% if q %}<a class="ghost" href="/panel/messages" style="padding:8px 14px">清除</a>{% endif %}
+  </form>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr><th>时间</th><th>类型</th><th>来源</th><th>内容</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td style="white-space:nowrap">{{ r.time }}</td>
+      <td>{{ {'sms':'短信','call':'来电','notify':'通知'}.get(r.type, r.type) }}</td>
+      <td>{{ r.sender or r.app or '-' }}{% if r.app and r.sender %}<div class="hint">{{ r.app }}</div>{% endif %}</td>
+      <td>{{ r.content }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="row" style="margin-top:12px">
+    {% if page > 1 %}<a class="ghost" href="/panel/messages?q={{ q }}&page={{ page-1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">上一页</a>{% endif %}
+    {% if page < pages %}<a class="ghost" href="/panel/messages?q={{ q }}&page={{ page+1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">下一页</a>{% endif %}
+  </div>
+  {% else %}
+  <p>还没有收到消息。等手机上配置好之后就会出现在这里。</p>
+  {% endif %}
+</div>
+{% endblock %}

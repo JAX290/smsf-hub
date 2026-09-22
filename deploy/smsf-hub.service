@@ -1,0 +1,32 @@
+[Unit]
+Description=SmsForwarder Hub - 短信/来电/通知转发中枢
+Documentation=https://github.com/JAX290/smsf-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/smsf-hub
+Environment=SMSF_CONFIG=/opt/smsf-hub/config.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/smsf-hub/venv/bin/python /opt/smsf-hub/run.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=smsf-hub
+
+# 这台服务器只有 1.9G 内存，加个上限免得拖垮你别的项目
+MemoryMax=400M
+MemoryHigh=300M
+CPUQuota=80%
+
+# 基础加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/smsf-hub
+
+[Install]
+WantedBy=multi-user.target

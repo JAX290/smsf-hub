@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>归档文件</h2>
+  <p class="hint">目录结构：类型 / 主题 / 日期.md。每个主题可以单独打包下载。</p>
+  <a href="/panel/archive/download-all"><button>打包下载全部归档</button></a>
+</div>
+
+{% if archive_stat.level in ('yellow','red') %}
+<div class="banner {{ archive_stat.level }}">
+  归档已用 {{ archive_stat.used_mb }} MB / {{ archive_stat.limit_mb }} MB（{{ archive_stat.percent }}%）
+</div>
+{% endif %}
+
+<div class="card">
+  {% if groups %}
+  <table>
+    <tr><th>类型</th><th>主题</th><th>文件数</th><th>大小</th><th>操作</th></tr>
+    {% for g in groups %}
+    <tr>
+      <td>{{ g.type }}</td>
+      <td>{{ g.subject }}</td>
+      <td>{{ g.files }}</td>
+      <td>{{ g.human }}</td>
+      <td><a href="/panel/archive/download?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">打包下载</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>归档还是空的。</p>
+  {% endif %}
+</div>
+{% endblock %}

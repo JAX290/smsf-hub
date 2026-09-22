@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>推送渠道</h2>
+  <p class="hint">启用哪些渠道，消息就会同时推到哪些渠道。凭据只存在服务器，不会进 APK。</p>
+</div>
+
+{% for b in blocks %}
+<form method="post" action="/panel/channels/{{ b.name }}">
+  <div class="card">
+    <h2>{{ b.display }}
+      {% if b.enabled %}<span class="badge b-ok">已启用</span>{% else %}<span class="badge b-off">未启用</span>{% endif %}
+    </h2>
+    <table>
+    {% for it in b.schema %}
+      {% set v = b.vals.get(it.path) %}
+      <tr>
+        <th style="width:34%">{{ it.label }}
+          {% if it.hint %}<div class="hint">{{ it.hint }}</div>{% endif %}
+        </th>
+        <td>
+          {% if it.type == 'bool' %}
+            <label class="chk"><input type="checkbox" name="{{ it.path }}" {{ 'checked' if v else '' }}> 开启</label>
+          {% elif it.type == 'choice' %}
+            <select name="{{ it.path }}">
+              {% for val, txt in it.choices %}
+              <option value="{{ val }}" {{ 'selected' if v|string == val|string else '' }}>{{ txt }}</option>
+              {% endfor %}
+            </select>
+          {% elif it.type == 'int' %}
+            <input type="number" name="{{ it.path }}" value="{{ v }}">
+          {% else %}
+            <input type="text" name="{{ it.path }}" value="{{ v }}">
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button type="submit">保存</button>
+      <button class="ghost" type="submit" formaction="/panel/test/{{ b.name }}">发一条测试消息</button>
+    </div>
+  </div>
+</form>
+{% endfor %}
+{% endblock %}
