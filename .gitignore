@@ -29,11 +29,13 @@ __pycache__/
 # 本地工具与临时文件
 _*.py
 _*.sh
+_*.bat
 deploy/_*.sh
 deploy/_remote.py
 _local_*
 *.bak
 *.orig
+一键授权.bat
 .DS_Store
 Thumbs.db
 
