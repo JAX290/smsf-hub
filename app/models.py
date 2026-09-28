@@ -7,12 +7,14 @@ from typing import Any
 
 # 消息类型 -> 中文目录名
 TYPE_DIR = {
+    "sent": "已发送",
     "sms": "短信",
     "call": "来电",
     "notify": "APP通知",
 }
 
 TYPE_LABEL = {
+    "sent": "已发送",
     "sms": "短信",
     "call": "来电",
     "notify": "通知",
