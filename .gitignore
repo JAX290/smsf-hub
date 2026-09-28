@@ -46,3 +46,24 @@ Thumbs.db
 upload_apk.log
 deploy/_dl_index.html
 .dl_short
+
+# 手机端源码里被脱敏的真实值（secret / 配对钥匙 / 域名）
+.android_secrets
+
+# Android 构建产物（仓库里只放源码）
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+android/local.properties
+android/keystore/
+android/captures/
+android/*.iml
+android/.externalNativeBuild/
+android/.cxx/
+android/app/release/
+android/app/debug/
+
+android/app/mapping.txt
+android/app/seeds.txt
+android/app/unused.txt
