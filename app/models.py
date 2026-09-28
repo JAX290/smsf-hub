@@ -1,9 +1,13 @@
 """上报消息的数据模型。"""
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+
+# 手机端固定输出的设备 ID，形如 SF-B7AEFBF931
+DEVICE_ID_RE = re.compile(r"SF-[0-9A-Fa-f]{6,16}")
 
 # 消息类型 -> 中文目录名
 TYPE_DIR = {
@@ -47,8 +51,32 @@ class Incoming:
         # 默认按发件人
         return self.sender or self.app or "未知来源"
 
+    @property
+    def device_key(self) -> str:
+        """归档用的设备标识。
+
+        优先取稳定的设备 ID（形如 SF-B7AEFBF931）—— 它在手机端模板里固定输出，
+        不会因为用户后来改了「设备备注」而变化。取不到才退回备注。
+
+        为什么不直接用 device 字段：那是用户可改的备注，历史上出现过同一台手机
+        先后叫过「手机2」和「红米」，拿它当目录名会把一台机器拆成好几组。
+        """
+        # raw 里存的是 pipeline 保留下来的原始上报值；device 可能已被换成备注。
+        raw = str(self.raw.get("_device_raw") or self.device or "").strip()
+        if raw and DEVICE_ID_RE.fullmatch(raw):
+            return raw.upper()
+        m = DEVICE_ID_RE.search(self.content or "")
+        if m:
+            return m.group(0).upper()
+        return raw
+
     def fingerprint(self) -> str:
-        return f"{self.type}|{self.sender}|{self.app}|{self.content}"
+        """去重指纹。
+
+        含设备维度：两台手机各自收到同一条消息（比如运营商群发）时，
+        应该各记一份，而不是被当成重复丢掉。同一台手机重复上报仍会被去重。
+        """
+        return f"{self.type}|{self.sender}|{self.app}|{self.content}|{self.device_key}"
 
     def merge_group(self, group_by: str) -> str:
         if group_by == "app":

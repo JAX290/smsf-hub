@@ -43,8 +43,17 @@ class Archive:
         return self.subject_rules.get(msg.type, "sender")
 
     def _dir_for(self, msg: Incoming) -> Path:
+        """归档目录：根 / 设备 / 类型 / 主题。
+
+        设备层放最外面，这样「按手机筛选、单独打包下载」就只是取一个子目录的事。
+        拿不到设备标识时退回不带设备层的老结构，保证任何情况都不会写坏路径。
+        """
         type_dir = TYPE_DIR.get(msg.type, msg.type or "其它")
-        return self.root / safe_name(type_dir) / safe_name(msg.subject(self._rule_for(msg)))
+        tail = [safe_name(type_dir), safe_name(msg.subject(self._rule_for(msg)))]
+        key = msg.device_key
+        if key:
+            return self.root.joinpath(safe_name(key), *tail)
+        return self.root.joinpath(*tail)
 
     def _target_file(self, dirpath: Path, day: str) -> Path:
         """返回应该写入的文件；超过大小上限则用 partN 滚动。"""
@@ -117,16 +126,22 @@ class Archive:
             "need_download": level == "red",
         }
 
-    def list_groups(self) -> list:
-        """列出 类型/主题 分组及大小，供面板展示与打包下载。"""
+    def list_groups(self, device: str = "") -> list:
+        """列出归档分组及大小，供面板展示与打包下载。
+
+        结构是 根/设备/类型/主题。同时兼容早期没有设备层的旧数据（根/类型/主题）。
+        device 非空时只返回该设备下的分组。
+        """
         out = []
         if not self.root.exists():
             return out
-        for type_dir in sorted([d for d in self.root.iterdir() if d.is_dir()]):
+
+        def collect(dev_name: str, type_dir: Path) -> None:
             for sub in sorted([d for d in type_dir.iterdir() if d.is_dir()]):
                 files = sorted(sub.glob("*.md"))
                 size = sum(f.stat().st_size for f in files if f.exists())
                 out.append({
+                    "device": dev_name,
                     "type": type_dir.name,
                     "subject": sub.name,
                     "files": len(files),
@@ -134,4 +149,36 @@ class Archive:
                     "mb": round(size / 1024 / 1024, 2),
                     "path": str(sub),
                 })
+
+        TYPE_NAMES = set(TYPE_DIR.values())
+        for top in sorted([d for d in self.root.iterdir() if d.is_dir()]):
+            if top.name in TYPE_NAMES:
+                if not device:
+                    collect("", top)
+            else:
+                if device and top.name != device:
+                    continue
+                for type_dir in sorted([d for d in top.iterdir() if d.is_dir()]):
+                    collect(top.name, type_dir)
+        return out
+
+    def list_devices(self) -> list:
+        """归档里出现过的设备，按占用从大到小。"""
+        agg: dict = {}
+        for g in self.list_groups():
+            dev = g["device"] or "(未标注设备)"
+            cur = agg.setdefault(dev, {"device": dev, "bytes": 0, "files": 0, "groups": 0})
+            cur["bytes"] += g["bytes"]
+            cur["files"] += g["files"]
+            cur["groups"] += 1
+        out = sorted(agg.values(), key=lambda x: -x["bytes"])
+        for d in out:
+            d["mb"] = round(d["bytes"] / 1024 / 1024, 2)
+        return out
+
+    def files_of_device(self, device: str) -> list:
+        """某台设备名下的全部归档文件。"""
+        out = []
+        for g in self.list_groups(device=device):
+            out.extend(sorted(Path(g["path"]).glob("*.md")))
         return out

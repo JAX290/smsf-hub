@@ -149,9 +149,13 @@ class Pipeline:
 
         # 登记手机（首次出现自动编号）
         try:
-            rec = self.devices.touch(msg.device, source_ip)
+            # 先把手机上报的原始设备值留一份：devices.touch 之后 device 会被换成
+            # 用户可改的备注，而归档目录名需要的是稳定标识（设备 ID 不会变）。
+            raw_device = msg.device
+            rec = self.devices.touch(raw_device, source_ip)
             self.stats["devices"] = self.devices.count()
             msg.device = rec.get("remark") or rec["label"]
+            msg.raw["_device_raw"] = raw_device
         except Exception:
             log.exception("手机登记失败")
 

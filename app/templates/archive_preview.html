@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="card">
-  <h2>归档预览：{{ type }} / {{ subject }}</h2>
+  <h2>归档预览：{% if device_label %}{{ device_label }} / {% endif %}{{ type }} / {{ subject }}</h2>
   <p class="hint">
     共 {{ file_total }} 个文件{% if file_total > files_limit %}（下面先显示最近 {{ files_limit }} 个）{% endif %}。
     每个文件最多预览前 {{ chars }} 字。
   </p>
   <div class="row">
-    <a class="ghost" href="/panel/archive" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">← 返回归档列表</a>
-    <a href="/panel/archive/download?type={{ type | urlencode }}&subject={{ subject | urlencode }}"><button>打包下载这一组</button></a>
+    <a class="ghost" href="/panel/archive{% if device %}?device={{ device | urlencode }}{% endif %}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">← 返回归档列表</a>
+    <a href="/panel/archive/download?type={{ type | urlencode }}&subject={{ subject | urlencode }}{% if device %}&device={{ device | urlencode }}{% endif %}"><button>打包下载这一组</button></a>
   </div>
 </div>
 
@@ -20,7 +20,7 @@
         <strong>{{ f.name }}</strong>
         <div class="hint">{{ f.entries }} 条记录 · {{ f.size }} · 修改于 {{ f.mtime }}</div>
       </div>
-      <a href="/panel/archive/download?type={{ type | urlencode }}&subject={{ subject | urlencode }}">下载本组</a>
+      <a href="/panel/archive/download?type={{ type | urlencode }}&subject={{ subject | urlencode }}{% if device %}&device={{ device | urlencode }}{% endif %}">下载本组</a>
     </div>
     <pre style="margin-top:10px;white-space:pre-wrap;max-height:520px;overflow:auto">{{ f.head }}{% if f.truncated %}
 …（仅预览开头 {{ chars }} 字，完整内容请打包下载）{% endif %}</pre>

@@ -191,6 +191,22 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
 
     # ---------------- 配对（换服务器后自动重配 secret） ----------------
 
+    def _device_label(key: str) -> str:
+        """把归档目录里的设备 ID 换成面板上好看的名字。
+
+        目录名用的是稳定的设备 ID（SF-xxxxxxxx），而 devices.json 里记着
+        用户给它起的备注（如 nova6）。查不到就原样显示。
+        """
+        if not key:
+            return "(未标注设备)"
+        try:
+            for rec in (pipeline.devices.all() or []):
+                if rec.get("key") == key:
+                    return rec.get("remark") or rec.get("label") or key
+        except Exception:
+            pass
+        return key
+
     def _fallback_gate() -> dict:
         return {"on": False, "mode": "off", "configured": False,
                 "text": "不可用", "detail": "配对模块未加载"}
@@ -470,16 +486,22 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
     # ---------------- 归档 ----------------
 
     @router.get("/panel/archive", response_class=HTMLResponse)
-    async def archive_page(request: Request):
+    async def archive_page(request: Request, device: str = Query("")):
         guard(request)
-        groups = pipeline.archive.list_groups()
+        groups = pipeline.archive.list_groups(device=device)
+        devices = pipeline.archive.list_devices()
         app_table = build_map(cfg.get("panel.app_names", {}) or {})
         for g in groups:
             g["human"] = _human(g["bytes"])
             # 主题若是应用包名，额外给一个中文显示名（磁盘目录名不变）
             g["subject_display"] = display_name(g["subject"], app_table)
             g["is_pkg"] = g["subject_display"] != g["subject"]
-        return templates.TemplateResponse("archive.html", ctx(request, active="archive", groups=groups))
+            g["device_display"] = _device_label(g.get("device") or "")
+        for d in devices:
+            d["human"] = _human(d["bytes"])
+            d["label"] = _device_label(d["device"])
+        return templates.TemplateResponse("archive.html", ctx(
+            request, active="archive", groups=groups, devices=devices, current_device=device))
 
     def _zip_bytes(targets) -> bytes:
         buf = io.BytesIO()
@@ -502,10 +524,27 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         return StreamingResponse(io.BytesIO(data), media_type="application/zip",
                                  headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
-    @router.get("/panel/archive/download")
-    async def download_one(request: Request, type: str = Query(""), subject: str = Query("")):
+    @router.get("/panel/archive/download-device")
+    async def download_device(request: Request, device: str = Query("")):
+        """把某一台手机的全部归档打包下载。"""
         guard(request)
-        sub = pipeline.archive.root / type / subject
+        if not device:
+            raise HTTPException(status_code=400, detail="缺少设备参数")
+        files = pipeline.archive.files_of_device(device)
+        if not files:
+            raise HTTPException(status_code=404, detail="该设备没有归档文件")
+        data = _zip_bytes(files)
+        safe = device.replace("/", "_").replace("\\", "_")
+        label = _device_label(device).replace("/", "_")
+        name = f"{label}-{safe}-{datetime.now().strftime('%Y%m%d')}.zip"
+        return StreamingResponse(io.BytesIO(data), media_type="application/zip",
+                                 headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @router.get("/panel/archive/download")
+    async def download_one(request: Request, type: str = Query(""), subject: str = Query(""),
+                          device: str = Query("")):
+        guard(request)
+        sub = pipeline.archive.root / device / type / subject if device else pipeline.archive.root / type / subject
         if not sub.exists() or pipeline.archive.root not in sub.resolve().parents:
             raise HTTPException(status_code=404, detail="找不到该分组")
         files = sorted(sub.glob("*.md"))
@@ -521,12 +560,14 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         request: Request,
         type: str = Query(""),
         subject: str = Query(""),
+        device: str = Query(""),
         files_limit: int = Query(20, ge=1, le=300),
         chars: int = Query(4000, ge=200, le=100000),
     ):
         """归档分组「预览详情」：不下载也能看到组里有哪些文件、每个文件的开头内容。"""
         guard(request)
-        sub = pipeline.archive.root / type / subject
+        sub = (pipeline.archive.root / device / type / subject) if device \
+            else (pipeline.archive.root / type / subject)
         if not sub.exists() or pipeline.archive.root not in sub.resolve().parents:
             raise HTTPException(status_code=404, detail="找不到该分组")
         files = sorted(sub.glob("*.md"))
@@ -546,7 +587,8 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
                 "truncated": len(text) > chars,
             })
         return templates.TemplateResponse("archive_preview.html", ctx(
-            request, active="archive", type=type, subject=subject,
+            request, active="archive", type=type, subject=subject, device=device,
+            device_label=_device_label(device) if device else "",
             files=items, file_total=len(files), files_limit=files_limit, chars=chars))
 
     # ---------------- 参数设置（表单） ----------------

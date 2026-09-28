@@ -2,7 +2,8 @@
 {% block body %}
 <div class="card">
   <h2>归档文件</h2>
-  <p class="hint">目录结构：类型 / 主题 / 日期.md。点「预览详情」可以直接看内容，确认后再「打包下载」。</p>
+  <p class="hint">目录结构：<b>设备 / 类型 / 主题 / 日期.md</b>。
+     想只看某一台手机，就先在下面选它，再单独打包下载。</p>
   <a href="/panel/archive/download-all"><button>打包下载全部归档</button></a>
 </div>
 
@@ -13,18 +14,50 @@
 {% endif %}
 
 <div class="card">
+  <h3>按手机查看</h3>
+  <table>
+    <tr><th>手机</th><th>分组</th><th>文件</th><th>大小</th><th>操作</th></tr>
+    <tr{% if not current_device %} style="background:rgba(255,255,255,.05)"{% endif %}>
+      <td><a href="/panel/archive">全部手机</a></td>
+      <td colspan="2" class="hint">不筛选，看所有设备</td>
+      <td class="hint">—</td>
+      <td><a href="/panel/archive/download-all">打包下载全部</a></td>
+    </tr>
+    {% for d in devices %}
+    <tr{% if current_device == d.device %} style="background:rgba(255,255,255,.05)"{% endif %}>
+      <td><a href="/panel/archive?device={{ d.device | urlencode }}">{{ d.label }}</a>
+          {% if d.label != d.device %}<div class="hint">{{ d.device }}</div>{% endif %}</td>
+      <td>{{ d.groups }}</td>
+      <td>{{ d.files }}</td>
+      <td>{{ d.human }}</td>
+      <td style="white-space:nowrap">
+        <a href="/panel/archive?device={{ d.device | urlencode }}">只看这台</a>
+        &nbsp;·&nbsp;
+        <a href="/panel/archive/download-device?device={{ d.device | urlencode }}">打包下载这台</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if not devices %}<p class="hint">还没有任何设备归档。</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3>{% if current_device %}该手机的归档分组{% else %}全部归档分组{% endif %}</h3>
   {% if groups %}
   <table>
-    <tr><th>类型</th><th>主题</th><th>文件数</th><th>大小</th><th>操作</th></tr>
+    <tr><th>手机</th><th>类型</th><th>主题</th><th>文件数</th><th>大小</th><th>操作</th></tr>
     {% for g in groups %}
     <tr>
+      <td>{{ g.device_display }}</td>
       <td>{{ g.type }}</td>
       <td>{{ g.subject_display or g.subject }}{% if g.is_pkg %}<div class="hint">{{ g.subject }}</div>{% endif %}</td>
       <td>{{ g.files }}</td>
       <td>{{ g.human }}</td>
-      <td style="white-space:nowrap"><a href="/panel/archive/preview?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">预览详情</a>
-          &nbsp;·&nbsp;
-          <a href="/panel/archive/download?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">打包下载</a></td>
+      <td style="white-space:nowrap">
+        <a href="/panel/archive/preview?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}&device={{ g.device | urlencode }}">预览详情</a>
+        &nbsp;·&nbsp;
+        <a href="/panel/archive/download?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}&device={{ g.device | urlencode }}">打包下载</a>
+      </td>
     </tr>
     {% endfor %}
   </table>
