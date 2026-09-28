@@ -49,6 +49,10 @@ SCHEMA = [
      "choices": [["sender", "来电号码"], ["app", "应用名"]]},
     {"group": "archive", "path": "archive.subject_rules.notify", "label": "APP通知按什么分主题", "type": "choice",
      "choices": [["app", "应用名"], ["sender", "发件人"]]},
+    {"group": "archive", "path": "archive.subject_rules.location", "label": "定位按什么分主题", "type": "choice",
+     "choices": [["none", "不分主题（推荐）"], ["sender", "来源"]],
+     "hint": "定位没有发件人，一般选「不分主题」，直接按日期归档"},
+
 
     # ---- 安全 ----
     {"group": "security", "path": "security.timestamp_tolerance_seconds", "label": "时间戳容忍范围（秒）", "type": "int",

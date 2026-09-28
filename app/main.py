@@ -21,7 +21,7 @@ from .verify import check_timestamp, verify_sign, verify_pair_sign
 
 log = logging.getLogger("smsf-hub")
 
-VALID_KINDS = {"sent", "sms", "call", "notify"}
+VALID_KINDS = {"sent", "sms", "call", "notify", "location"}
 
 
 def setup_logging(cfg) -> None:

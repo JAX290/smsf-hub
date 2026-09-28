@@ -106,6 +106,7 @@ archive:
     sms: "sender"           # 短信：按发件人号码分主题
     call: "sender"          # 来电：按来电号码分主题
     notify: "app"            # APP通知：按应用名分主题
+    location: "none"        # 定位：不分主题，直接以日期归档
 
   # 单文件大小上限（MB）。超过就滚动成 2026-09-22.part2.md，避免一个文件无限变大
   file_max_mb: 5

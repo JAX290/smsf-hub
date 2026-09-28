@@ -49,7 +49,9 @@ class Archive:
         拿不到设备标识时退回不带设备层的老结构，保证任何情况都不会写坏路径。
         """
         type_dir = TYPE_DIR.get(msg.type, msg.type or "其它")
-        tail = [safe_name(type_dir), safe_name(msg.subject(self._rule_for(msg)))]
+        subject = msg.subject(self._rule_for(msg))
+        # subject 为空表示这一类不再分主题（比如定位），直接放在类型目录下
+        tail = [safe_name(type_dir)] + ([safe_name(subject)] if subject else [])
         key = msg.device_key
         if key:
             return self.root.joinpath(safe_name(key), *tail)

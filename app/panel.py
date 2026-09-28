@@ -458,11 +458,11 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         _type_rows = _apply(base_rows, "mtype")
         _type_set = {(r.get("type") or "") for r in _type_rows} - {""}
         mtypes = [(k, v) for k, v in
-                  (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"))
+                  (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"), ("location", "定位"))
                   if k in _type_set]
         if mtype and mtype not in [k for k, _ in mtypes]:
             mtypes.insert(0, (mtype, next((v for k, v in
-                                          (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"))
+                                          (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"), ("location", "定位"))
                                           if k == mtype), mtype)))
 
         app_rows = _apply(base_rows, "app")

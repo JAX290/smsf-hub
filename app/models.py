@@ -15,6 +15,7 @@ TYPE_DIR = {
     "sms": "短信",
     "call": "来电",
     "notify": "APP通知",
+    "location": "定位",
 }
 
 TYPE_LABEL = {
@@ -22,6 +23,7 @@ TYPE_LABEL = {
     "sms": "短信",
     "call": "来电",
     "notify": "通知",
+    "location": "定位",
 }
 
 
@@ -45,7 +47,9 @@ class Incoming:
         return datetime.fromtimestamp(ts / 1000.0)
 
     def subject(self, rule: str) -> str:
-        """按配置决定归档目录里的『主题』。"""
+        """按配置决定归档目录里的『主题』。返回空串表示不再分一层。"""
+        if rule == "none":
+            return ""
         if rule == "app":
             return self.app or self.title or "未知应用"
         # 默认按发件人
