@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from collections import deque
 from datetime import datetime
@@ -17,6 +18,40 @@ from .merge import Merger
 from .models import Incoming
 
 log = logging.getLogger("smsf-hub.pipeline")
+
+# ---- 手机端上报格式的兼容处理 ----------------------------------------------
+# SmsForwarder 转发「应用通知」时，默认模板和短信几乎一样：
+#   type 仍是 sms、应用包名塞在 sender 里、正文里带「UID：」行。
+# 这样面板上的「类型筛选（通知）」永远筛不出东西、「应用」列也是空的。
+# 这里按内容特征做一次纠正：含 UID 行的当通知，包名从发件人挪到应用名。
+_NOTIFY_HINT = ("UID：", "UID:")
+_TEL_RE = re.compile(r"^[\d+\-\s]{5,}$")
+
+
+def classify_notify(mtype: str, sender: str, content: str):
+    """返回纠正后的 (type, sender, app)。app 为空表示不用改。"""
+    if mtype != "sms":
+        return mtype, sender, ""
+    text = content or ""
+    if not any(h in text for h in _NOTIFY_HINT):
+        return mtype, sender, ""          # 没有通知特征，就是普通短信
+    s = (sender or "").strip()
+    if s and not _TEL_RE.match(s):
+        return "notify", "", s             # 包名/应用名 → 挪到 app
+    return "notify", sender, ""
+
+
+def fix_record(rec: dict) -> dict:
+    """对历史记录做同样的纠正，供面板展示时使用（不改动磁盘上的原始数据）。"""
+    mtype, sender, app = classify_notify(rec.get("type", ""), rec.get("sender", ""), rec.get("content", ""))
+    if mtype == rec.get("type") and sender == rec.get("sender") and not app:
+        return rec
+    out = dict(rec)
+    out["type"] = mtype
+    out["sender"] = sender
+    if app:
+        out["app"] = app
+    return out
 
 
 class Pipeline:
@@ -120,6 +155,12 @@ class Pipeline:
         except Exception:
             log.exception("手机登记失败")
 
+        # 兼容手机端的通知上报格式（包名在 sender、正文带 UID 行）
+        _t, _s, _a = classify_notify(msg.type, msg.sender, msg.content)
+        msg.type, msg.sender = _t, _s
+        if _a:
+            msg.app = _a
+
         if self.dedup.seen(msg):
             self.stats["duplicates"] += 1
             log.info("重复消息已跳过: %s", msg.fingerprint()[:60])
@@ -140,7 +181,7 @@ class Pipeline:
             "type": msg.type,
             "sender": msg.sender,
             "app": msg.app,
-            "content": (msg.content or "")[:300],
+            "content": (msg.content or "")[:2000],   # 面板要能展开看详情，留长一点
             "device": msg.device,
             "archived": bool(path),
         }

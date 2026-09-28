@@ -13,6 +13,7 @@ import zipfile
 import yaml
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -20,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from .channels import CHANNEL_CLASSES, CHANNEL_NAMES
 from .settings_schema import CHANNEL_EDITABLE, GROUP_LABELS, SCHEMA
+from .pipeline import fix_record
 from .verify import compute_sign
 from .yaml_edit import update_many
 
@@ -278,21 +280,82 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
 
     # ---------------- 消息流 ----------------
 
+    # 消息流支持的排序字段（表头点击切换）
+    _MSG_SORT_FIELDS = {
+        "time": "时间",
+        "type": "类型",
+        "sender": "发件人",
+        "app": "应用",
+        "device": "终端",
+        "content": "内容",
+    }
+
     @router.get("/panel/messages", response_class=HTMLResponse)
-    async def messages(request: Request, q: str = Query(""), page: int = Query(1, ge=1)):
+    async def messages(
+        request: Request,
+        q: str = Query(""),
+        page: int = Query(1, ge=1),
+        device: str = Query(""),
+        mtype: str = Query(""),
+        sort: str = Query("time"),
+        order: str = Query("desc"),
+    ):
         guard(request)
-        rows = list(pipeline.recent)
+        # 展示前纠正「通知被当成短信上报」的历史记录（不改磁盘数据）
+        rows = [fix_record(r) for r in pipeline.recent]
+
+        # 关键字搜索：正文 / 发件人 / 应用名
         if q:
             ql = q.lower()
             rows = [r for r in rows if ql in (r["content"] or "").lower()
                     or ql in (r["sender"] or "").lower() or ql in (r["app"] or "").lower()]
+
+        # 按终端筛选（分不同手机查看）
+        if device:
+            rows = [r for r in rows if (r.get("device") or "") == device]
+
+        # 按消息类型筛选：sms / call / notify
+        if mtype:
+            rows = [r for r in rows if (r.get("type") or "") == mtype]
+
+        # 排序（表头点一下切换升降序）
+        if sort not in _MSG_SORT_FIELDS:
+            sort = "time"
+        if order not in ("asc", "desc"):
+            order = "desc"
+        sort_key = {
+            "time": lambda r: r.get("time") or "",
+            "type": lambda r: r.get("type") or "",
+            "sender": lambda r: (r.get("sender") or r.get("app") or ""),
+            "app": lambda r: r.get("app") or "",
+            "device": lambda r: r.get("device") or "",
+            "content": lambda r: r.get("content") or "",
+        }[sort]
+        rows.sort(key=sort_key, reverse=(order == "desc"))
+
         size = int(cfg.get("panel.page_size", 50) or 50)
         total = len(rows)
         pages = max(1, (total + size - 1) // size)
         page = min(page, pages)
         page_rows = rows[(page - 1) * size: page * size]
+
+        # 终端下拉候选：优先用注册表里的显示名，再补上消息里出现过的
+        devices = [d["display"] for d in pipeline.devices.all()]
+        for d in {r.get("device") or "" for r in pipeline.recent}:
+            if d and d not in devices:
+                devices.append(d)
+        # 表头排序链接：保留当前筛选条件，点一次切换升降序
+        sort_links = {}
+        for _k in _MSG_SORT_FIELDS:
+            _nxt = "asc" if (sort == _k and order == "desc") else "desc"
+            sort_links[_k] = "/panel/messages?" + urlencode(
+                {"q": q, "device": device, "mtype": mtype, "sort": _k, "order": _nxt})
+
         return templates.TemplateResponse("messages.html", ctx(
-            request, active="messages", rows=page_rows, q=q, page=page, pages=pages, total=total))
+            request, active="messages", rows=page_rows, q=q, page=page, pages=pages,
+            total=total, device=device, mtype=mtype, sort=sort, order=order,
+            devices=devices, sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
+            filtered=len(rows) != len(pipeline.recent)))
 
     # ---------------- 手机管理 ----------------
 
@@ -364,6 +427,39 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         name = f"{type}-{subject}-{datetime.now().strftime('%Y%m%d')}.zip"
         return StreamingResponse(io.BytesIO(data), media_type="application/zip",
                                  headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @router.get("/panel/archive/preview", response_class=HTMLResponse)
+    async def archive_preview(
+        request: Request,
+        type: str = Query(""),
+        subject: str = Query(""),
+        files_limit: int = Query(20, ge=1, le=300),
+        chars: int = Query(4000, ge=200, le=100000),
+    ):
+        """归档分组「预览详情」：不下载也能看到组里有哪些文件、每个文件的开头内容。"""
+        guard(request)
+        sub = pipeline.archive.root / type / subject
+        if not sub.exists() or pipeline.archive.root not in sub.resolve().parents:
+            raise HTTPException(status_code=404, detail="找不到该分组")
+        files = sorted(sub.glob("*.md"))
+        items = []
+        for f in files[:files_limit]:
+            try:
+                st = f.stat()
+                text = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            items.append({
+                "name": f.name,
+                "size": _human(st.st_size),
+                "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "entries": sum(1 for line in text.splitlines() if line.startswith("## ")),
+                "head": text[:chars],
+                "truncated": len(text) > chars,
+            })
+        return templates.TemplateResponse("archive_preview.html", ctx(
+            request, active="archive", type=type, subject=subject,
+            files=items, file_total=len(files), files_limit=files_limit, chars=chars))
 
     # ---------------- 参数设置（表单） ----------------
 

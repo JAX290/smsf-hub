@@ -2,7 +2,7 @@
 {% block body %}
 <div class="card">
   <h2>归档文件</h2>
-  <p class="hint">目录结构：类型 / 主题 / 日期.md。每个主题可以单独打包下载。</p>
+  <p class="hint">目录结构：类型 / 主题 / 日期.md。点「预览详情」可以直接看内容，确认后再「打包下载」。</p>
   <a href="/panel/archive/download-all"><button>打包下载全部归档</button></a>
 </div>
 
@@ -22,7 +22,9 @@
       <td>{{ g.subject }}</td>
       <td>{{ g.files }}</td>
       <td>{{ g.human }}</td>
-      <td><a href="/panel/archive/download?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">打包下载</a></td>
+      <td style="white-space:nowrap"><a href="/panel/archive/preview?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">预览详情</a>
+          &nbsp;·&nbsp;
+          <a href="/panel/archive/download?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">打包下载</a></td>
     </tr>
     {% endfor %}
   </table>

@@ -1,33 +1,61 @@
 {% extends "base.html" %}
 {% block body %}
+{% set qs = 'q=' ~ (q|urlencode) ~ '&device=' ~ (device|urlencode) ~ '&mtype=' ~ (mtype|urlencode) ~ '&sort=' ~ sort ~ '&order=' ~ order %}
 <div class="card">
-  <h2>消息流（共 {{ total }} 条，第 {{ page }}/{{ pages }} 页）</h2>
+  <h2>消息流（共 {{ total }} 条{% if q or device or mtype %}，已筛选{% endif %}，第 {{ page }}/{{ pages }} 页）</h2>
   <form method="get" action="/panel/messages" class="row">
-    <input type="text" name="q" value="{{ q }}" placeholder="搜索内容 / 号码 / 应用名" style="max-width:320px">
-    <button type="submit">搜索</button>
-    {% if q %}<a class="ghost" href="/panel/messages" style="padding:8px 14px">清除</a>{% endif %}
+    <input type="text" name="q" value="{{ q }}" placeholder="搜索 内容 / 号码 / 应用名" style="max-width:250px">
+    <select name="device" style="max-width:170px">
+      <option value="">全部终端</option>
+      {% for d in devices %}<option value="{{ d }}" {% if d == device %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+    <select name="mtype" style="max-width:130px">
+      <option value="">全部类型</option>
+      <option value="sms" {% if mtype == 'sms' %}selected{% endif %}>短信</option>
+      <option value="call" {% if mtype == 'call' %}selected{% endif %}>来电</option>
+      <option value="notify" {% if mtype == 'notify' %}selected{% endif %}>通知</option>
+    </select>
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="order" value="{{ order }}">
+    <button type="submit">筛选</button>
+    {% if q or device or mtype %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
   </form>
+  <div class="hint">点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。</div>
 </div>
 
 <div class="card">
   {% if rows %}
   <table>
-    <tr><th>时间</th><th>类型</th><th>来源</th><th>内容</th></tr>
+    <tr>
+      {% for key, label in sort_fields.items() %}
+      <th style="white-space:nowrap">
+        <a href="{{ sort_links[key] }}" style="color:{% if sort == key %}var(--accent){% else %}var(--dim){% endif %}">{{ label }}{% if sort == key %} {{ '▼' if order == 'desc' else '▲' }}{% endif %}</a>
+      </th>
+      {% endfor %}
+    </tr>
     {% for r in rows %}
     <tr>
       <td style="white-space:nowrap">{{ r.time }}</td>
-      <td>{{ {'sms':'短信','call':'来电','notify':'通知'}.get(r.type, r.type) }}</td>
-      <td>{{ r.sender or r.app or '-' }}{% if r.app and r.sender %}<div class="hint">{{ r.app }}</div>{% endif %}</td>
-      <td>{{ r.content }}</td>
+      <td style="white-space:nowrap">{{ {'sms':'短信','call':'来电','notify':'通知'}.get(r.type, r.type) }}</td>
+      <td>{{ r.sender or '-' }}</td>
+      <td>{{ r.app or '-' }}</td>
+      <td style="white-space:nowrap">{{ r.device or '-' }}</td>
+      <td style="max-width:420px">
+        <details>
+          <summary style="cursor:pointer">{{ (r.content or '(空)')[:70] }}{% if (r.content or '')|length > 70 %}…{% endif %}</summary>
+          <pre style="margin:8px 0 0;white-space:pre-wrap">{{ r.content or '(空)' }}</pre>
+          {% if r.archived %}<div class="hint">已归档</div>{% endif %}
+        </details>
+      </td>
     </tr>
     {% endfor %}
   </table>
   <div class="row" style="margin-top:12px">
-    {% if page > 1 %}<a class="ghost" href="/panel/messages?q={{ q }}&page={{ page-1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">上一页</a>{% endif %}
-    {% if page < pages %}<a class="ghost" href="/panel/messages?q={{ q }}&page={{ page+1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">下一页</a>{% endif %}
+    {% if page > 1 %}<a class="ghost" href="/panel/messages?{{ qs }}&page={{ page - 1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">上一页</a>{% endif %}
+    {% if page < pages %}<a class="ghost" href="/panel/messages?{{ qs }}&page={{ page + 1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">下一页</a>{% endif %}
   </div>
   {% else %}
-  <p>还没有收到消息。等手机上配置好之后就会出现在这里。</p>
+  <p>没有匹配的消息。{% if q or device or mtype %}换个筛选条件试试，或者 <a href="/panel/messages">清除筛选</a>。{% endif %}</p>
   {% endif %}
 </div>
 {% endblock %}
