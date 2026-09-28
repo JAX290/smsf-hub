@@ -6,15 +6,13 @@
   <form method="get" action="/panel/messages" class="row">
     <input type="text" name="q" value="{{ q }}" placeholder="搜索 内容 / 号码 / 应用名" style="max-width:250px">
     <select name="device" style="max-width:170px">
-      <option value="">全部终端</option>
+      <option value="">全部终端{% if devices|length > 1 %}（{{ devices|length }} 台）{% endif %}</option>
       {% for d in devices %}<option value="{{ d }}" {% if d == device %}selected{% endif %}>{{ d }}</option>{% endfor %}
     </select>
     <select name="mtype" style="max-width:130px">
       <option value="">全部类型</option>
-      <option value="sms" {% if mtype == 'sms' %}selected{% endif %}>短信</option>
-      <option value="call" {% if mtype == 'call' %}selected{% endif %}>来电</option>
-      <option value="notify" {% if mtype == 'notify' %}selected{% endif %}>通知</option>
-      <option value="sent" {% if mtype == 'sent' %}selected{% endif %}>已发送</option>
+      {# 候选跟随其他筛选联动，只列出当前条件下真实存在的类型 #}
+      {% for k, label in mtypes %}<option value="{{ k }}" {% if k == mtype %}selected{% endif %}>{{ label }}</option>{% endfor %}
     </select>
     <select name="app" style="max-width:190px">
       <option value="">全部应用（{{ apps|length }} 个）</option>
@@ -25,7 +23,7 @@
     <button type="submit">筛选</button>
     {% if q or device or mtype or app %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
   </form>
-  <div class="hint">点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。</div>
+  <div class="hint">点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。<br>终端 / 类型 / 应用三个下拉是联动的 —— 选了一台手机后，应用里只会剩下它实际有的那些。</div>
 </div>
 
 <div class="card">

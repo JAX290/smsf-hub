@@ -389,26 +389,27 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         order: str = Query("desc"),
     ):
         guard(request)
-        # 展示前纠正「通知被当成短信上报」的历史记录（不改磁盘数据）
-        rows = [fix_record(r) for r in pipeline.recent]
+        base_rows = [fix_record(r) for r in pipeline.recent]
 
-        # 关键字搜索：正文 / 发件人 / 应用名
-        if q:
-            ql = q.lower()
-            rows = [r for r in rows if ql in (r["content"] or "").lower()
-                    or ql in (r["sender"] or "").lower() or ql in (r["app"] or "").lower()]
+        def _apply(rows: list, skip: str) -> list:
+            """按当前筛选条件过滤；skip 指定跳过哪个维度。
 
-        # 按终端筛选（分不同手机查看）
-        if device:
-            rows = [r for r in rows if (r.get("device") or "") == device]
+            跳过某个维度，是为了算那个下拉框自己的候选值 ——
+            比如算「应用」候选时不能把 app 条件也套上，否则选完就只剩一项了。
+            """
+            if q and skip != "q":
+                ql = q.lower()
+                rows = [r for r in rows if ql in (r["content"] or "").lower()
+                        or ql in (r["sender"] or "").lower() or ql in (r["app"] or "").lower()]
+            if device and skip != "device":
+                rows = [r for r in rows if (r.get("device") or "") == device]
+            if mtype and skip != "mtype":
+                rows = [r for r in rows if (r.get("type") or "") == mtype]
+            if app and skip != "app":
+                rows = [r for r in rows if (r.get("app") or "") == app]
+            return rows
 
-        # 按消息类型筛选：sms / call / notify
-        if mtype:
-            rows = [r for r in rows if (r.get("type") or "") == mtype]
-
-        # 按 APP 筛选（通知是按应用包名上报的）
-        if app:
-            rows = [r for r in rows if (r.get("app") or "") == app]
+        rows = _apply(base_rows, "")
 
         # 排序（表头点一下切换升降序）
         if sort not in _MSG_SORT_FIELDS:
@@ -431,15 +432,35 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         page = min(page, pages)
         page_rows = rows[(page - 1) * size: page * size]
 
-        # 终端下拉候选：优先用注册表里的显示名，再补上消息里出现过的
-        devices = [d["display"] for d in pipeline.devices.all()]
-        for d in {r.get("device") or "" for r in pipeline.recent}:
-            if d and d not in devices:
-                devices.append(d)
-        # APP 下拉候选 + 展示用中文名（内置映射表，config 里可覆盖）
+        # ---- 下拉候选：跟随其他筛选条件联动 ----
+        # 选完手机之后，应用下拉只该列出这台手机实际有的应用；
+        # 反之亦然。当前已选中的值即使不在候选里也保留，避免下拉「跳变」。
         app_table = build_map(cfg.get("panel.app_names", {}) or {})
-        app_keys = sorted({(r.get("app") or "") for r in [fix_record(x) for x in pipeline.recent]} - {""})
+
+        dev_rows = _apply(base_rows, "device")
+        dev_set = {(r.get("device") or "") for r in dev_rows} - {""}
+        devices = [d["display"] for d in pipeline.devices.all() if d["display"] in dev_set]
+        for d in sorted(dev_set):
+            if d not in devices:
+                devices.append(d)
+        if device and device not in devices:
+            devices.insert(0, device)
+
+        _type_rows = _apply(base_rows, "mtype")
+        _type_set = {(r.get("type") or "") for r in _type_rows} - {""}
+        mtypes = [(k, v) for k, v in
+                  (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"))
+                  if k in _type_set]
+        if mtype and mtype not in [k for k, _ in mtypes]:
+            mtypes.insert(0, (mtype, next((v for k, v in
+                                          (("sms", "短信"), ("call", "来电"), ("notify", "通知"), ("sent", "已发送"))
+                                          if k == mtype), mtype)))
+
+        app_rows = _apply(base_rows, "app")
+        app_keys = sorted({(r.get("app") or "") for r in app_rows} - {""})
         apps = [{"key": k, "name": display_name(k, app_table)} for k in app_keys]
+        if app and app not in app_keys:
+            apps.insert(0, {"key": app, "name": display_name(app, app_table) + "（当前筛选下没有）"})
         for r in page_rows:
             r["app_display"] = display_name(r.get("app"), app_table)
 
@@ -454,7 +475,8 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         return templates.TemplateResponse("messages.html", ctx(
             request, active="messages", rows=page_rows, q=q, page=page, pages=pages,
             total=total, device=device, mtype=mtype, sort=sort, order=order,
-            devices=devices, apps=apps, app=app, sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
+            devices=devices, apps=apps, app=app, mtypes=mtypes,
+            sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
             filtered=len(rows) != len(pipeline.recent)))
 
     # ---------------- 手机管理 ----------------
