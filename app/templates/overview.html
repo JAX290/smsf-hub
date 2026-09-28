@@ -42,6 +42,68 @@
     </div>
   </div>
 </div>
+{% set pg = pair_gate %}
+<div class="apkbar {{ 'on' if pg.on else 'off' }}" style="margin-top:12px">
+  <span class="dot"></span>
+  <div>
+    <div class="t">配对（换服务器后自动重配）：{{ pg.text }}</div>
+    <div class="s">{{ pg.detail }}</div>
+  </div>
+  {% if pg.on %}
+  <form method="post" action="/panel/pair-off" style="margin-left:auto">
+    <button type="submit" class="stop">立即关闭</button>
+  </form>
+  {% endif %}
+
+  <div class="links">
+    {% if pair_configured %}
+    <div class="grants">
+      <form method="post" action="/panel/pair-open">
+        <input type="hidden" name="mode" value="minutes">
+        <span>开启</span>
+        <input type="number" name="amount" value="30" min="1" max="1440">
+        <span>分钟</span>
+        <button type="submit" class="go">开启</button>
+      </form>
+      <form method="post" action="/panel/pair-open">
+        <input type="hidden" name="mode" value="until_paired">
+        <button type="submit" class="go">开启到匹配成功</button>
+      </form>
+      <span>「开启到匹配成功」会一直开着，手机配上的那一刻自动关闭</span>
+    </div>
+    {% else %}
+    <div class="addrs">
+      还没配置配对钥匙。去「<a href="/panel/settings">参数设置 → 安全</a>」填上 <code>security.pair_key</code>，重启服务后启用。
+    </div>
+    {% endif %}
+
+    {% if pair_logs %}
+    <div style="margin-top:10px">
+      <b>最近配对记录</b>
+      {% for e in pair_logs %}
+      <div>· {{ e.at }} — {{ e.device }} 来自 {{ e.ip }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="addrs" style="margin-top:12px">
+      <b>手机上报用的 secret</b>：
+      {% if current_secret.has %}
+        <code>{{ current_secret.masked }}</code> <span>（{{ current_secret.len }} 位）</span>
+        {% if current_secret.revealed %}
+          <div style="margin-top:6px">完整值：<code style="word-break:break-all">{{ current_secret.full }}</code></div>
+          <div style="margin-top:4px"><a href="/panel/">收起</a> — 换服务器前抄下来，填到新服务器的 config.yaml 里就行</div>
+        {% else %}
+          <a href="/panel/?reveal=1">显示完整值</a>
+          <span>— 换服务器前抄一份，填进新服务器的 config.yaml 即可，无需动手机</span>
+        {% endif %}
+      {% else %}
+        <span style="color:var(--bad)">未设置（手机无法上报）</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 {% if archive_stat.level == 'red' %}
 <div class="banner red">
   <b>归档已满！</b> 已用 {{ archive_stat.used_mb }} MB / 上限 {{ archive_stat.limit_mb }} MB。

@@ -56,6 +56,10 @@ SCHEMA = [
     {"group": "security", "path": "security.extra_token_header", "label": "附加校验请求头名", "type": "str",
      "hint": "可选。留空则不启用。例如 X-Token"},
     {"group": "security", "path": "security.extra_token_value", "label": "附加校验请求头值", "type": "str"},
+    {"group": "security", "path": "security.pair_key", "label": "配对钥匙（换服务器自动重配用）", "type": "str",
+     "hint": "和手机 APK 里内置的一致。留空则配对功能不可用。生成：openssl rand -hex 32"},
+    {"group": "security", "path": "security.pair_rate_limit_per_minute", "label": "配对请求限速（次/分钟）", "type": "int",
+     "min": 1, "max": 120, "hint": "防止配对接口被反复试探"},
 
     # ---- 面板 ----
     {"group": "panel", "path": "panel.auth_enabled", "label": "面板要求登录口令", "type": "bool",

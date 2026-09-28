@@ -27,17 +27,29 @@ echo "[3/6] 安装依赖"
 echo "[4/6] 生成配置文件（若不存在）"
 if [ ! -f "$APP_DIR/config.yaml" ]; then
     cp "$APP_DIR/config.example.yaml" "$APP_DIR/config.yaml"
-    SECRET=$(openssl rand -hex 32)
-    PANEL_PWD=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)
+
+    # 换服务器时，把原来那把 secret 和配对钥匙带上，手机就不用动：
+    #     SMSF_SECRET=<旧secret> SMSF_PAIR_KEY=<配对钥匙> bash install.sh
+    # 不传就随机生成（全新部署的情况）。
+    SECRET="${SMSF_SECRET:-}"
+    PAIR_KEY="${SMSF_PAIR_KEY:-}"
+    PANEL_PWD="${SMSF_PANEL_PWD:-}"
+    [ -n "$SECRET" ]    || SECRET=$(openssl rand -hex 32)
+    [ -n "$PAIR_KEY" ]  || PAIR_KEY=$(openssl rand -hex 32)
+    [ -n "$PANEL_PWD" ] || PANEL_PWD=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)
+
     sed -i "s|secret: \"请改成你自己的长随机串_至少32位\"|secret: \"$SECRET\"|" "$APP_DIR/config.yaml"
     sed -i "s|password: \"请改成你自己的口令\"|password: \"$PANEL_PWD\"|" "$APP_DIR/config.yaml"
+    sed -i "s|^  pair_key: \"\"|  pair_key: \"$PAIR_KEY\"|" "$APP_DIR/config.yaml"
     chmod 600 "$APP_DIR/config.yaml"
     echo
     echo "  ============================================"
-    echo "   已生成配置，请记下这两个值："
+    echo "   已生成配置，请记下这三个值："
     echo "   手机端 secret : $SECRET"
+    echo "   配对钥匙      : $PAIR_KEY"
     echo "   面板登录口令  : $PANEL_PWD"
     echo "  ============================================"
+    echo "   （换服务器时想省事，下次带上这三个环境变量重跑本脚本即可）"
     echo
 else
     echo "  config.yaml 已存在，跳过生成"

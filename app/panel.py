@@ -60,7 +60,7 @@ def _human(n: int) -> str:
     return f"{n:.1f} GB"
 
 
-def build_panel_router(cfg, pipeline) -> APIRouter:
+def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
     router = APIRouter()
     config_path = str(cfg.path)
 
@@ -181,9 +181,53 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
             "overview": pipeline.overview(),
             "archive_stat": pipeline.archive.stats(),
             "apk_gate": gate_state(),
+            "pair_gate": _pair_state(),
+            "pair_logs": _pair_logs(),
+            "current_secret": _secret_view(bool(kw.pop("reveal", False))),
+            "pair_configured": bool(pairing and pairing.configured),
         }
         base.update(kw)
         return base
+
+    # ---------------- 配对（换服务器后自动重配 secret） ----------------
+
+    def _fallback_gate() -> dict:
+        return {"on": False, "mode": "off", "configured": False,
+                "text": "不可用", "detail": "配对模块未加载"}
+
+    def _pair_state() -> dict:
+        if not pairing:
+            return _fallback_gate()
+        try:
+            return pairing.state()
+        except Exception as exc:
+            log.warning("读取配对状态失败: %s", exc)
+            return _fallback_gate()
+
+    def _pair_logs() -> list:
+        if not pairing:
+            return []
+        try:
+            return pairing.recent_logs(5)
+        except Exception:
+            return []
+
+    def _secret_view(reveal: bool) -> dict:
+        """当前手机上报用的 secret。
+
+        默认打码显示；面板上点「显示完整值」才展开（走 ?reveal=1）。
+        面板本身只绑 Tailscale，但打码能防投屏/截图时被顺手看到。
+        """
+        try:
+            data = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+            val = str((data.get("security") or {}).get("secret") or "")
+        except Exception:
+            val = ""
+        if not val:
+            return {"has": False, "masked": "", "full": "", "len": 0}
+        masked = f"{val[:6]}…{val[-4:]}" if len(val) > 12 else "•" * len(val)
+        return {"has": True, "masked": masked, "full": val if reveal else "",
+                "len": len(val), "revealed": reveal}
 
     # ---------------- 下载闸门（供 nginx auth_request 调用） ----------------
 
@@ -241,6 +285,31 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         log.info("安装包下载：已手动关闭")
         return RedirectResponse("/panel/", status_code=303)
 
+    @router.post("/panel/pair-open")
+    async def pair_open(request: Request, mode: str = Form(""), amount: str = Form("")):
+        """开启配对闸门：限时 / 一直开到配对成功。"""
+        guard(request)
+        if not pairing or not pairing.configured:
+            log.warning("尝试开启配对，但未配置 security.pair_key")
+            return RedirectResponse("/panel/?pair_err=nokey", status_code=303)
+        if mode == "until_paired":
+            pairing.open("until_paired")
+        else:
+            try:
+                n = max(1, min(1440, int(float(amount or 30))))
+            except (ValueError, TypeError):
+                n = 30
+            pairing.open("minutes", n)
+        return RedirectResponse("/panel/", status_code=303)
+
+    @router.post("/panel/pair-off")
+    async def pair_off(request: Request):
+        """立即关闭配对闸门。"""
+        guard(request)
+        if pairing:
+            pairing.close("手动关闭")
+        return RedirectResponse("/panel/", status_code=303)
+
     # ---------------- 登录 ----------------
 
     @router.get("/", response_class=HTMLResponse)
@@ -248,14 +317,15 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         return RedirectResponse("/panel/")
 
     @router.get("/panel/", response_class=HTMLResponse)
-    async def home(request: Request):
+    async def home(request: Request, reveal: str = Query("")):
+        _rv = reveal in ("1", "true", "yes")
         if not auth_on():
-            return templates.TemplateResponse("overview.html", ctx(request, active="overview"))
+            return templates.TemplateResponse("overview.html", ctx(request, active="overview", reveal=_rv))
         if not password():
             return templates.TemplateResponse("login.html", ctx(request, need_setup=True))
         if not _is_authed(request, password()):
             return templates.TemplateResponse("login.html", ctx(request, need_setup=False))
-        return templates.TemplateResponse("overview.html", ctx(request, active="overview"))
+        return templates.TemplateResponse("overview.html", ctx(request, active="overview", reveal=_rv))
 
     @router.post("/panel/login")
     async def login(request: Request, pwd: str = Form("")):
@@ -275,9 +345,9 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
     # ---------------- 总览 ----------------
 
     @router.get("/panel/overview", response_class=HTMLResponse)
-    async def overview(request: Request):
+    async def overview(request: Request, reveal: str = Query("")):
         guard(request)
-        return templates.TemplateResponse("overview.html", ctx(request, active="overview"))
+        return templates.TemplateResponse("overview.html", ctx(request, active="overview", reveal=reveal in ("1", "true", "yes")))
 
     # ---------------- 消息流 ----------------
 
