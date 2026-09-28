@@ -19,6 +19,7 @@ from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from .app_names import build_map, display_name
 from .channels import CHANNEL_CLASSES, CHANNEL_NAMES
 from .settings_schema import CHANNEL_EDITABLE, GROUP_LABELS, SCHEMA
 from .pipeline import fix_record
@@ -297,6 +298,7 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         page: int = Query(1, ge=1),
         device: str = Query(""),
         mtype: str = Query(""),
+        app: str = Query(""),
         sort: str = Query("time"),
         order: str = Query("desc"),
     ):
@@ -317,6 +319,10 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         # 按消息类型筛选：sms / call / notify
         if mtype:
             rows = [r for r in rows if (r.get("type") or "") == mtype]
+
+        # 按 APP 筛选（通知是按应用包名上报的）
+        if app:
+            rows = [r for r in rows if (r.get("app") or "") == app]
 
         # 排序（表头点一下切换升降序）
         if sort not in _MSG_SORT_FIELDS:
@@ -344,17 +350,25 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
         for d in {r.get("device") or "" for r in pipeline.recent}:
             if d and d not in devices:
                 devices.append(d)
+        # APP 下拉候选 + 展示用中文名（内置映射表，config 里可覆盖）
+        app_table = build_map(cfg.get("panel.app_names", {}) or {})
+        app_keys = sorted({(r.get("app") or "") for r in [fix_record(x) for x in pipeline.recent]} - {""})
+        apps = [{"key": k, "name": display_name(k, app_table)} for k in app_keys]
+        for r in page_rows:
+            r["app_display"] = display_name(r.get("app"), app_table)
+
         # 表头排序链接：保留当前筛选条件，点一次切换升降序
         sort_links = {}
         for _k in _MSG_SORT_FIELDS:
             _nxt = "asc" if (sort == _k and order == "desc") else "desc"
             sort_links[_k] = "/panel/messages?" + urlencode(
-                {"q": q, "device": device, "mtype": mtype, "sort": _k, "order": _nxt})
+                {"q": q, "device": device, "mtype": mtype, "app": app,
+                 "sort": _k, "order": _nxt})
 
         return templates.TemplateResponse("messages.html", ctx(
             request, active="messages", rows=page_rows, q=q, page=page, pages=pages,
             total=total, device=device, mtype=mtype, sort=sort, order=order,
-            devices=devices, sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
+            devices=devices, apps=apps, app=app, sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
             filtered=len(rows) != len(pipeline.recent)))
 
     # ---------------- 手机管理 ----------------
@@ -389,8 +403,12 @@ def build_panel_router(cfg, pipeline) -> APIRouter:
     async def archive_page(request: Request):
         guard(request)
         groups = pipeline.archive.list_groups()
+        app_table = build_map(cfg.get("panel.app_names", {}) or {})
         for g in groups:
             g["human"] = _human(g["bytes"])
+            # 主题若是应用包名，额外给一个中文显示名（磁盘目录名不变）
+            g["subject_display"] = display_name(g["subject"], app_table)
+            g["is_pkg"] = g["subject_display"] != g["subject"]
         return templates.TemplateResponse("archive.html", ctx(request, active="archive", groups=groups))
 
     def _zip_bytes(targets) -> bytes:

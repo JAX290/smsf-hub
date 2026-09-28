@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block body %}
-{% set qs = 'q=' ~ (q|urlencode) ~ '&device=' ~ (device|urlencode) ~ '&mtype=' ~ (mtype|urlencode) ~ '&sort=' ~ sort ~ '&order=' ~ order %}
+{% set qs = 'q=' ~ (q|urlencode) ~ '&device=' ~ (device|urlencode) ~ '&mtype=' ~ (mtype|urlencode) ~ '&app=' ~ (app|urlencode) ~ '&sort=' ~ sort ~ '&order=' ~ order %}
 <div class="card">
-  <h2>消息流（共 {{ total }} 条{% if q or device or mtype %}，已筛选{% endif %}，第 {{ page }}/{{ pages }} 页）</h2>
+  <h2>消息流（共 {{ total }} 条{% if q or device or mtype or app %}，已筛选{% endif %}，第 {{ page }}/{{ pages }} 页）</h2>
   <form method="get" action="/panel/messages" class="row">
     <input type="text" name="q" value="{{ q }}" placeholder="搜索 内容 / 号码 / 应用名" style="max-width:250px">
     <select name="device" style="max-width:170px">
@@ -15,10 +15,14 @@
       <option value="call" {% if mtype == 'call' %}selected{% endif %}>来电</option>
       <option value="notify" {% if mtype == 'notify' %}selected{% endif %}>通知</option>
     </select>
+    <select name="app" style="max-width:190px">
+      <option value="">全部应用（{{ apps|length }} 个）</option>
+      {% for a in apps %}<option value="{{ a.key }}" {% if a.key == app %}selected{% endif %}>{{ a.name }}</option>{% endfor %}
+    </select>
     <input type="hidden" name="sort" value="{{ sort }}">
     <input type="hidden" name="order" value="{{ order }}">
     <button type="submit">筛选</button>
-    {% if q or device or mtype %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
+    {% if q or device or mtype or app %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
   </form>
   <div class="hint">点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。</div>
 </div>
@@ -38,7 +42,7 @@
       <td style="white-space:nowrap">{{ r.time }}</td>
       <td style="white-space:nowrap">{{ {'sms':'短信','call':'来电','notify':'通知'}.get(r.type, r.type) }}</td>
       <td>{{ r.sender or '-' }}</td>
-      <td>{{ r.app or '-' }}</td>
+      <td>{{ r.app_display or '-' }}</td>
       <td style="white-space:nowrap">{{ r.device or '-' }}</td>
       <td style="max-width:420px">
         <details>
@@ -55,7 +59,7 @@
     {% if page < pages %}<a class="ghost" href="/panel/messages?{{ qs }}&page={{ page + 1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">下一页</a>{% endif %}
   </div>
   {% else %}
-  <p>没有匹配的消息。{% if q or device or mtype %}换个筛选条件试试，或者 <a href="/panel/messages">清除筛选</a>。{% endif %}</p>
+  <p>没有匹配的消息。{% if q or device or mtype or app %}换个筛选条件试试，或者 <a href="/panel/messages">清除筛选</a>。{% endif %}</p>
   {% endif %}
 </div>
 {% endblock %}

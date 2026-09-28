@@ -19,7 +19,7 @@
     {% for g in groups %}
     <tr>
       <td>{{ g.type }}</td>
-      <td>{{ g.subject }}</td>
+      <td>{{ g.subject_display or g.subject }}{% if g.is_pkg %}<div class="hint">{{ g.subject }}</div>{% endif %}</td>
       <td>{{ g.files }}</td>
       <td>{{ g.human }}</td>
       <td style="white-space:nowrap"><a href="/panel/archive/preview?type={{ g.type | urlencode }}&subject={{ g.subject | urlencode }}">预览详情</a>
