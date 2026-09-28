@@ -391,6 +391,11 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         guard(request)
         base_rows = [fix_record(r) for r in pipeline.recent]
 
+        app_table = build_map(cfg.get("panel.app_names", {}) or {})
+
+        def _disp(v: str) -> str:
+            return display_name(v, app_table)
+
         def _apply(rows: list, skip: str) -> list:
             """按当前筛选条件过滤；skip 指定跳过哪个维度。
 
@@ -406,7 +411,11 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             if mtype and skip != "mtype":
                 rows = [r for r in rows if (r.get("type") or "") == mtype]
             if app and skip != "app":
-                rows = [r for r in rows if (r.get("app") or "") == app]
+                # 同一个应用可能有两种写法：中文名（Soul）和包名（cn.soulapp.android）。
+                # 映射表会把包名翻成中文，于是两个 key 共用一个显示名。
+                # 这里按「显示名」匹配，保证选一次就能把两种写法都筛出来。
+                rows = [r for r in rows if (r.get("app") or "") == app
+                        or _disp(r.get("app")) == app]
             return rows
 
         rows = _apply(base_rows, "")
@@ -458,9 +467,19 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
 
         app_rows = _apply(base_rows, "app")
         app_keys = sorted({(r.get("app") or "") for r in app_rows} - {""})
-        apps = [{"key": k, "name": display_name(k, app_table)} for k in app_keys]
-        if app and app not in app_keys:
-            apps.insert(0, {"key": app, "name": display_name(app, app_table) + "（当前筛选下没有）"})
+        # 按显示名合并：同一个应用若既有中文名又有包名，只在下拉里出一项，
+        # 但 value 用显示名 —— 筛选时上面那段会把两种写法一起匹配。
+        _merged = {}
+        for k in app_keys:
+            nm = _disp(k)
+            if nm not in _merged:
+                _merged[nm] = {"key": nm, "name": nm, "variants": [k]}
+            else:
+                _merged[nm]["variants"].append(k)
+        apps = [{"key": v["key"], "name": v["name"], "variants": v["variants"]}
+                for v in sorted(_merged.values(), key=lambda x: x["name"])]
+        if app and app not in _merged:
+            apps.insert(0, {"key": app, "name": app + "（当前筛选下没有）", "variants": []})
         for r in page_rows:
             r["app_display"] = display_name(r.get("app"), app_table)
 
