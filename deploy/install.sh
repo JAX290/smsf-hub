@@ -150,8 +150,49 @@ if [ ! -f "$APP_DIR/config.yaml" ]; then
     PAIR_KEY="${SMSF_PAIR_KEY:-}"
     PANEL_PWD="${SMSF_PANEL_PWD:-}"
     [ -n "$SECRET" ]    || SECRET=$(openssl rand -hex 32)
-    [ -n "$PAIR_KEY" ]  || PAIR_KEY=$(openssl rand -hex 32)
     [ -n "$PANEL_PWD" ] || PANEL_PWD=$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)
+
+    # ------------------------------------------------------------------
+    #  配对钥匙要不要随机生成 —— 必须问清楚，不能默默生成。
+    #
+    #  原因：这把钥匙【编译在 APK 里】。手机上装好的 APK 烧的是旧钥匙，
+    #        新服务器若随机生成一把不同的，手机的自动配对会被验签拒绝（401），
+    #        表现是「静默失联」—— 服务器这边服务 active、面板正常，
+    #        手机却永远上报不上来，极难排查。
+    #        （2026-09-28 遇到过同类现象，查了 5 小时）
+    #
+    #  默认选项是「不是，我还没取到旧钥匙」—— 宁可中止也不能埋雷。
+    # ------------------------------------------------------------------
+    if [ -z "$PAIR_KEY" ] && [ "${SMSF_FRESH_DEPLOY:-0}" != "1" ]; then
+        echo
+        echo "  ⚠️  你没有提供配对钥匙（SMSF_PAIR_KEY）。"
+        echo
+        echo "      这把钥匙是【编译在 APK 里】的。新服务器必须和手机上那把一致，"
+        echo "      否则手机换服务器后无法自动配对，会表现为「静默失联」——"
+        echo "      服务器这边看起来一切正常，手机却永远上报不上来。"
+        echo
+        if [ "$INTERACTIVE" = "1" ]; then
+            echo "      如果你是从旧服务器搬过来，先取旧 config.yaml 里的 pair_key，再这样重跑："
+            echo "          SMSF_PAIR_KEY=<旧钥匙> bash install.sh"
+            echo
+            printf "      确认这是全新部署（手机上也会重新装 APK）？[y/N] "
+            read -r _confirm || true
+            case "$_confirm" in
+                y|Y|yes|YES) ;;
+                *)
+                    echo
+                    echo "      已中止 —— 取到旧钥匙后重跑本脚本。"
+                    exit 1
+                    ;;
+            esac
+        else
+            echo "      非交互模式下不替你决定这件事，已中止。"
+            echo "      要么给 SMSF_PAIR_KEY=<旧钥匙>，"
+            echo "      要么确认是全新部署后加 SMSF_FRESH_DEPLOY=1 重跑。"
+            exit 1
+        fi
+    fi
+    [ -n "$PAIR_KEY" ] || PAIR_KEY=$(openssl rand -hex 32)
 
     SMSF_X_SECRET="$SECRET" SMSF_X_PAIR="$PAIR_KEY" SMSF_X_PWD="$PANEL_PWD" \
     SMSF_X_HOST="$TS_IP" SMSF_X_DOMAIN="$DOMAIN" SMSF_X_DLDIR="$DL_DIR" \
