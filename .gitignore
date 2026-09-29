@@ -7,6 +7,9 @@ config.yaml
 config.*.yaml
 !config.example.yaml
 
+# 渠道「终端」配置（含 webhook / token，且由面板自动维护、可整份重写）
+channels.yaml
+
 # 归档数据（含短信正文，属于你个人隐私）
 app/data/
 data/
@@ -26,12 +29,19 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# 本地工具与临时文件
-_*.py
-_*.sh
-_*.bat
+# 本地工具与临时文件（只忽略仓库根目录下的，别误伤 app/channels/__init__.py）
+/_*.py
+/_*.sh
+/_*.bat
 deploy/_*.sh
-deploy/_remote.py
+deploy/_*.js
+deploy/_*.py
+deploy/_*.b64
+
+# 万一以后有别的规则又误伤到它
+!__init__.py
+deploy/_*.js
+deploy/_*.py
 _local_*
 *.bak
 *.orig

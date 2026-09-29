@@ -42,6 +42,10 @@ DEFAULTS: dict[str, Any] = {
         "content_max_chars": 4000,
     },
     "channels": {},
+    # 渠道的「终端」配置另存一个文件 —— 它由面板完全接管（增删终端、改转发规则），
+    # 可以整份重写，所以不放 config.yaml，免得把这里的注释和缩进弄坏。
+    # config.yaml 里那份老的 channels 段只在第一次升级时当种子用。
+    "channels_file": "./channels.yaml",
     "panel": {
         "title": "短信转发中枢",
         "password": "",

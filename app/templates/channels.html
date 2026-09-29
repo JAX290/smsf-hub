@@ -1,46 +1,133 @@
 {% extends "base.html" %}
 {% block body %}
+<style>
+  .inst { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin:0 0 12px; background:#0b1118; }
+  .inst-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;
+               padding-bottom:8px; border-bottom:1px solid var(--line); }
+  .inst-head b { font-size:14px; }
+  .inst-head .hint { margin:0; }
+  button.danger { background:transparent; border:1px solid var(--bad); color:var(--bad); }
+  .chklist { display:flex; flex-direction:column; gap:6px; }
+</style>
+
 <div class="card">
   <h2>推送渠道</h2>
-  <p class="hint">启用哪些渠道，消息就会同时推到哪些渠道。凭据只存在服务器，不会进 APK。</p>
+  <p class="hint">
+    启用了哪个终端，消息就推到哪个终端。<b>一个渠道可以加多个终端</b>——比如两台不同的企业微信机器人、三个不同的群。
+    凭据只存在服务器，不会进 APK。
+  </p>
+  <p class="hint">每个终端还能单独设「转发规则」：只把某台手机、某类通知、某个应用推给它。规则留空 = 全收。</p>
+  {% if known_devices %}
+  <p class="hint">目前登记过的手机：{% for d in known_devices %}<code>{{ d }}</code> {% endfor %}</p>
+  {% endif %}
 </div>
 
 {% for b in blocks %}
-<form method="post" action="/panel/channels/{{ b.name }}">
-  <div class="card">
-    <h2>{{ b.display }}
-      {% if b.enabled %}<span class="badge b-ok">已启用</span>{% else %}<span class="badge b-off">未启用</span>{% endif %}
-    </h2>
+<div class="card">
+  <h2>{{ b.display }}
+    {% if b.instances %}<span class="badge b-off">{{ b.instances|length }} 个终端</span>{% endif %}
+  </h2>
+
+  {% for inst in b.instances %}
+  <form method="post" action="/panel/channels/{{ b.name }}">
+  <input type="hidden" name="inst_id" value="{{ inst.id }}">
+  <div class="inst">
+    <div class="inst-head">
+      <b>{{ inst.label or ('终端 ' ~ loop.index) }}</b>
+      {% if inst.id in b.live %}
+        <span class="badge b-ok">已启用</span>
+      {% else %}
+        <span class="badge b-off">未启用</span>
+      {% endif %}
+    </div>
     <table>
-    {% for it in b.schema %}
-      {% set v = b.vals.get(it.path) %}
+      {% for f in b.fields %}
+      {% set nm = 'inst.' ~ inst.id ~ '.' ~ f.key %}
+      {% set v = inst.get(f.key) %}
       <tr>
-        <th style="width:34%">{{ it.label }}
-          {% if it.hint %}<div class="hint">{{ it.hint }}</div>{% endif %}
+        <th style="width:32%">{{ f.label }}
+          {% if f.hint %}<div class="hint">{{ f.hint }}</div>{% endif %}
         </th>
         <td>
-          {% if it.type == 'bool' %}
-            <label class="chk"><input type="checkbox" name="{{ it.path }}" {{ 'checked' if v else '' }}> 开启</label>
-          {% elif it.type == 'choice' %}
-            <select name="{{ it.path }}">
-              {% for val, txt in it.choices %}
+          {% if f.type == 'bool' %}
+            <label class="chk"><input type="checkbox" name="{{ nm }}" {{ 'checked' if v else '' }}> 开启</label>
+          {% elif f.type == 'choice' %}
+            <select name="{{ nm }}">
+              {% for val, txt in f.choices %}
               <option value="{{ val }}" {{ 'selected' if v|string == val|string else '' }}>{{ txt }}</option>
               {% endfor %}
             </select>
-          {% elif it.type == 'int' %}
-            <input type="number" name="{{ it.path }}" value="{{ v }}">
+          {% elif f.type == 'int' %}
+            <input type="number" name="{{ nm }}" value="{{ v }}">
           {% else %}
-            <input type="text" name="{{ it.path }}" value="{{ v }}">
+            <input type="text" name="{{ nm }}" value="{{ v }}">
           {% endif %}
         </td>
       </tr>
-    {% endfor %}
+      {% endfor %}
+
+      <tr><th colspan="2" style="padding-top:16px">
+        转发规则<div class="hint">留空就是「不限制」，这个终端收全部消息</div>
+      </th></tr>
+      {% for r in rules %}
+      <tr>
+        <th>{{ r.label }}<div class="hint">{{ r.hint }}</div></th>
+        <td><input type="text" name="inst.{{ inst.id }}.rules.{{ r.key }}" value="{{ inst.rules.get(r.key) }}"></td>
+      </tr>
+      {% endfor %}
     </table>
     <div class="row" style="margin-top:12px">
       <button type="submit">保存</button>
-      <button class="ghost" type="submit" formaction="/panel/test/{{ b.name }}">发一条测试消息</button>
+      <button type="submit" class="ghost" formaction="/panel/channels/{{ b.name }}/test">发一条测试消息</button>
+      <button type="submit" class="ghost danger" formaction="/panel/channels/{{ b.name }}/delete"
+              onclick="return confirm('确定删掉这个终端？')">删除这个终端</button>
     </div>
   </div>
-</form>
+  </form>
+  {% endfor %}
+
+  <form method="post" action="/panel/channels/{{ b.name }}/add">
+    <button type="submit" class="ghost">+ 添加终端</button>
+  </form>
+</div>
 {% endfor %}
+
+{% set total = blocks | map(attribute='instances') | map('length') | sum %}
+{% if total %}
+<div class="card">
+  <h2>同步转发规则</h2>
+  <p class="hint">把一个终端调好的转发规则，一次性复制给别的终端，不用一个个重填。</p>
+  <form method="post" action="/panel/sync_rules">
+    <table>
+      <tr>
+        <th style="width:32%">从哪个终端复制</th>
+        <td>
+          <select name="src">
+            <option value="">— 请选择 —</option>
+            {% for b in blocks %}{% for inst in b.instances %}
+            <option value="{{ b.name }}:{{ inst.id }}">{{ b.display }} · {{ inst.label or inst.id }}</option>
+            {% endfor %}{% endfor %}
+          </select>
+        </td>
+      </tr>
+      <tr>
+        <th>复制给哪些终端<div class="hint">可多选</div></th>
+        <td>
+          <div class="chklist">
+          {% for b in blocks %}{% for inst in b.instances %}
+            <label class="chk">
+              <input type="checkbox" name="targets" value="{{ b.name }}:{{ inst.id }}">
+              {{ b.display }} · {{ inst.label or inst.id }}
+            </label>
+          {% endfor %}{% endfor %}
+          </div>
+        </td>
+      </tr>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <button type="submit">同步规则</button>
+    </div>
+  </form>
+</div>
+{% endif %}
 {% endblock %}

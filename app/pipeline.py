@@ -272,11 +272,19 @@ class Pipeline:
                 break
         results = await dispatch(self.channels, items, device)
         for r in results:
+            if r.get("skipped"):
+                continue          # 按转发规则跳过：不算成功、也不算失败
             if r["ok"]:
                 self.stats["pushed_ok"] += 1
             else:
                 self.stats["pushed_fail"] += 1
-        log.info("分发完成 key=%s 条数=%d 渠道=%d", key, len(items), len(results))
+        log.info("分发完成 key=%s 条数=%d 终端=%d", key, len(items), len(results))
+
+    def reload_channels(self) -> int:
+        """面板改完渠道后热加载，不用重启服务。返回当前启用的终端数。"""
+        self.channels = build_channels(self.cfg)
+        log.info("渠道已重新加载，当前启用 %d 个终端", len(self.channels))
+        return len(self.channels)
 
     async def shutdown(self) -> None:
         await self.merger.flush_all()
@@ -293,7 +301,8 @@ class Pipeline:
             "archive": self.archive.stats(),
             "pending_merge": self.merger.pending(),
             "dedup_size": self.dedup.size(),
-            "channels": [{"name": c.name, "display": c.display, "enabled": c.enabled} for c in self.channels],
+            "channels": [{"name": c.name, "display": c.title, "enabled": c.enabled,
+                          "instance": c.inst_id} for c in self.channels],
             "merge": {
                 "enable": self.merger.enable,
                 "window_seconds": self.merger.window,

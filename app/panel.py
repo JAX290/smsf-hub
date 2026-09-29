@@ -22,7 +22,8 @@ from fastapi.templating import Jinja2Templates
 
 from .app_names import build_map, display_name
 from .channels import CHANNEL_CLASSES, CHANNEL_NAMES
-from .settings_schema import CHANNEL_EDITABLE, GROUP_LABELS, SCHEMA
+from . import channel_store
+from .settings_schema import CHANNEL_EDITABLE, GROUP_LABELS, RULE_FIELDS, SCHEMA
 from .pipeline import fix_record
 from .verify import compute_sign
 from .yaml_edit import update_many
@@ -716,23 +717,49 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             request, active="settings", changed=done,
             note="部分参数（如合并窗口）需要重启服务才生效：sudo systemctl restart smsf-hub"))
 
-    # ---------------- 渠道 ----------------
+    # ---------------- 渠道（终端） ----------------
+
+    def _known_devices() -> list:
+        """当前登记过的手机，给「只转发这些手机」当参考。"""
+        out = []
+        try:
+            for d in pipeline.devices.all():
+                label = str(d.get("label") or d.get("remark") or "").strip()
+                key = str(d.get("key") or "").strip()
+                if label and key:
+                    out.append("%s（%s）" % (label, key))
+                elif label or key:
+                    out.append(label or key)
+        except Exception:
+            pass
+        return out
+
+    def _channel_view() -> list:
+        data = channel_store.load(cfg)
+        blocks = []
+        for cls in CHANNEL_CLASSES:
+            if not CHANNEL_EDITABLE.get(cls.name):
+                continue
+            blocks.append({
+                "name": cls.name,
+                "display": cls.display,
+                "fields": channel_store.field_specs(cls.name),
+                "instances": data.get(cls.name) or [],
+                "live": [c.inst_id for c in pipeline.channels if c.name == cls.name],
+            })
+        return blocks
+
+    def _after_change():
+        """改完渠道立刻热加载，不用重启服务。"""
+        pipeline.reload_channels()
+        return RedirectResponse("/panel/channels", status_code=303)
 
     @router.get("/panel/channels", response_class=HTMLResponse)
     async def channels_page(request: Request):
         guard(request)
-        blocks = []
-        for cls in CHANNEL_CLASSES:
-            schema = CHANNEL_EDITABLE.get(cls.name)
-            if not schema:
-                continue
-            vals = {item["path"]: cfg.get(item["path"]) for item in schema}
-            inst = next((c for c in pipeline.channels if c.name == cls.name), None)
-            # 注意：键名不能叫 values —— Jinja2 里 b.values 会解析成字典的 .values() 方法
-            blocks.append({"name": cls.name, "display": cls.display, "schema": schema, "vals": vals,
-                           "enabled": bool(inst)})
         return templates.TemplateResponse("channels.html", ctx(
-            request, active="channels", blocks=blocks, editable=CHANNEL_EDITABLE))
+            request, active="channels", blocks=_channel_view(),
+            rules=RULE_FIELDS, known_devices=_known_devices()))
 
     @router.post("/panel/channels/{name}")
     async def channel_save(name: str, request: Request):
@@ -740,26 +767,117 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         if name not in CHANNEL_EDITABLE:
             raise HTTPException(status_code=404, detail="未知渠道")
         form = await request.form()
-        changes = {}
-        for item in CHANNEL_EDITABLE[name]:
-            if item["path"] not in form:
+        data = channel_store.load(cfg)
+        insts = data.setdefault(name, [])
+        by_id = {i["id"]: i for i in insts}
+        specs = channel_store.field_specs(name)
+        rpat = re.compile(r"^inst\.([A-Za-z0-9_]+)\.(.+)$")
+        touched = []
+        for raw_key in list(form.keys()):
+            m = rpat.match(raw_key)
+            if not m:
                 continue
-            raw = form[item["path"]]
-            t = item["type"]
-            if t == "bool":
-                changes[item["path"]] = str(raw).lower() in ("on", "true", "1", "yes")
-            elif t == "int":
+            iid, field = m.group(1), m.group(2)
+            inst = by_id.get(iid)
+            if inst is None:
+                inst = channel_store.blank_instance(name, iid)
+                insts.append(inst)
+                by_id[iid] = inst
+            if iid not in touched:
+                touched.append(iid)
+            if field.startswith("rules."):
+                rk = field.split(".", 1)[1]
+                if any(r["key"] == rk for r in RULE_FIELDS):
+                    inst["rules"][rk] = str(form[raw_key])
+                continue
+            spec = next((f for f in specs if f["key"] == field), None)
+            if spec is None:
+                continue
+            if spec["type"] == "int":
                 try:
-                    changes[item["path"]] = int(float(str(raw)))
+                    inst[field] = int(float(str(form[raw_key])))
                 except ValueError:
-                    continue
+                    pass
             else:
-                changes[item["path"]] = str(raw)
-        done = update_many(config_path, changes)
-        log.info("面板修改了渠道 %s: %s", name, ", ".join(done) or "(无变化)")
+                inst[field] = str(form[raw_key])
+        # 复选框没勾上就不会出现在表单里 —— 对这些字段按「关」处理
+        for iid in touched:
+            inst = by_id[iid]
+            for f in specs:
+                if f["type"] == "bool" and ("inst.%s.%s" % (iid, f["key"])) not in form:
+                    inst[f["key"]] = False
+        channel_store.save(cfg, data)
+        log.info("面板保存了渠道 %s（%d 个终端）", name, len(touched))
+        return _after_change()
+
+    @router.post("/panel/channels/{name}/add")
+    async def channel_add(name: str, request: Request):
+        guard(request)
+        if name not in CHANNEL_EDITABLE:
+            raise HTTPException(status_code=404, detail="未知渠道")
+        data = channel_store.load(cfg)
+        insts = data.setdefault(name, [])
+        insts.append(channel_store.blank_instance(
+            name, channel_store.pick_id([i["id"] for i in insts])))
+        channel_store.save(cfg, data)
+        log.info("面板给渠道 %s 加了一个终端", name)
+        return _after_change()
+
+    @router.post("/panel/channels/{name}/delete")
+    async def channel_delete(name: str, request: Request, inst_id: str = Form("")):
+        guard(request)
+        if name not in CHANNEL_EDITABLE:
+            raise HTTPException(status_code=404, detail="未知渠道")
+        data = channel_store.load(cfg)
+        data[name] = [i for i in (data.get(name) or []) if i["id"] != inst_id]
+        channel_store.save(cfg, data)
+        log.info("面板删掉了渠道 %s 的终端 %s", name, inst_id)
+        return _after_change()
+
+    @router.post("/panel/sync_rules")
+    async def sync_rules(request: Request):
+        """把某个终端调好的转发规则，一次性复制给别的终端。"""
+        guard(request)
+        form = await request.form()
+        src_full = str(form.get("src") or "")
+        targets = [str(v) for v in form.getlist("targets")]
+        sname, _, sid = src_full.partition(":")
+        data = channel_store.load(cfg)
+        src = next((i for i in (data.get(sname) or []) if i["id"] == sid), None)
+        if src is None or not targets:
+            return _after_change()
+        n = 0
+        for item in targets:
+            tname, _, tid = item.partition(":")
+            if tname not in CHANNEL_EDITABLE:
+                continue
+            if tname == sname and tid == sid:      # 别把自己覆盖了
+                continue
+            for i in (data.get(tname) or []):
+                if i["id"] == tid:
+                    i["rules"] = dict(src["rules"])
+                    n += 1
+        channel_store.save(cfg, data)
+        log.info("转发规则已从 %s 同步给 %d 个终端", src_full, n)
+        return _after_change()
+
+    @router.post("/panel/channels/{name}/test")
+    async def channel_test(name: str, request: Request, inst_id: str = Form("")):
+        guard(request)
+        inst = next((c for c in pipeline.channels
+                     if c.name == name and (not inst_id or c.inst_id == inst_id)), None)
+        if inst is None:
+            return templates.TemplateResponse("saved.html", ctx(
+                request, active="channels", changed=[],
+                note="这个终端当前没启用（开关是关的，或者改完还没保存）"))
+        from .models import Incoming
+        sample = Incoming(type="sms", sender="10086",
+                          content="这是一条来自 SmsForwarder Hub 的测试消息。",
+                          device="测试", ts=int(time.time() * 1000))
+        ok, info = await inst.send([sample], sample.device)
         return templates.TemplateResponse("saved.html", ctx(
-            request, active="channels", changed=done,
-            note="渠道开关需要重启服务才生效：sudo systemctl restart smsf-hub"))
+            request, active="channels", changed=[],
+            note=("测试成功：" if ok else "测试失败：") + str(info)))
 
     # ---------------- 修改面板口令 ----------------
 
