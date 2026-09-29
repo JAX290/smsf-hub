@@ -15,6 +15,7 @@ import androidx.work.workDataOf
 import com.google.gson.Gson
 import cn.ppps.forwarder.App
 import cn.ppps.forwarder.entity.LocationInfo
+import cn.ppps.forwarder.entity.MsgInfo
 import cn.ppps.forwarder.utils.ACTION_RESTART
 import cn.ppps.forwarder.utils.ACTION_START
 import cn.ppps.forwarder.utils.ACTION_STOP
@@ -25,6 +26,9 @@ import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.TASK_CONDITION_LEAVE_ADDRESS
 import cn.ppps.forwarder.utils.TASK_CONDITION_TO_ADDRESS
 import cn.ppps.forwarder.utils.TaskWorker
+import cn.ppps.forwarder.utils.Worker
+import cn.ppps.forwarder.utils.task.ConditionUtils.Companion.calculateDistance
+import cn.ppps.forwarder.workers.SendWorker
 import cn.ppps.forwarder.utils.task.TaskUtils
 import cn.ppps.forwarder.workers.LocationWorker
 import com.king.location.LocationErrorCode
@@ -88,6 +92,52 @@ class LocationService : Service() {
         unregisterReceiver(locationStatusReceiver)
     }
 
+    /**
+     * 位置变化时直接上报。
+     *
+     * 为什么不用原来的 LocationWorker：那条路要事先在「自动任务」里配好
+     * 「到达/离开某地址」的条件，没配就永远不触发。这里改成拿到位置就报，
+     * 只在两种情况下才发，避免刷屏和耗电：
+     *   · 距上次上报超过 N 分钟（默认 10）
+     *   · 或移动超过 M 米（默认 200）
+     * 两者满足其一即上报。
+     */
+    private fun maybeReportLocation(info: LocationInfo) {
+        if (!SettingUtils.enableLocationReport) return
+        try {
+            val now = System.currentTimeMillis()
+            val lastTime = SettingUtils.lastLocationReportTime
+            val intervalMin = SettingUtils.locationReportIntervalMin
+            val thresholdM = SettingUtils.locationReportDistanceM
+
+            val passedMin = if (lastTime > 0) (now - lastTime) / 60000.0 else Double.MAX_VALUE
+            val distance = if (lastTime > 0) {
+                calculateDistance(
+                    info.latitude, info.longitude,
+                    SettingUtils.lastLocationReportLat, SettingUtils.lastLocationReportLng
+                )
+            } else Double.MAX_VALUE
+
+            if (passedMin < intervalMin && distance < thresholdM) {
+                Log.d(TAG, "定位变化未达阈值（%.0f 米 / %.1f 分钟），跳过".format(distance, passedMin))
+                return
+            }
+
+            val msgInfo = MsgInfo("location", "定位", info.toString(), Date(), "")
+            val request = OneTimeWorkRequestBuilder<SendWorker>().setInputData(
+                workDataOf(Worker.SEND_MSG_INFO to Gson().toJson(msgInfo))
+            ).build()
+            WorkManager.getInstance(applicationContext).enqueue(request)
+
+            SettingUtils.lastLocationReportTime = now
+            SettingUtils.lastLocationReportLat = info.latitude
+            SettingUtils.lastLocationReportLng = info.longitude
+            Log.i(TAG, "已上报定位（距上次 %.0f 米 / %.1f 分钟）".format(distance, passedMin))
+        } catch (e: Exception) {
+            Log.e(TAG, "上报定位失败：${e.message}")
+        }
+    }
+
     private fun startService() {
         try {
             //清空缓存
@@ -129,6 +179,9 @@ class LocationService : Service() {
 
                             TaskUtils.locationInfoOld = locationInfoNew
                         }
+
+                        //【新增】位置变化时直接上报到服务端（不依赖定时任务，带节流）
+                        maybeReportLocation(locationInfoNew)
                     }
                 })
 

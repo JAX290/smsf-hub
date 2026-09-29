@@ -22,6 +22,7 @@ import cn.ppps.forwarder.utils.TASK_CONDITION_NETWORK
 import cn.ppps.forwarder.utils.TaskWorker
 import cn.ppps.forwarder.utils.task.TaskUtils
 import cn.ppps.forwarder.workers.NetworkWorker
+import cn.ppps.forwarder.workers.OfflineRetryWorker
 import java.util.concurrent.TimeUnit
 
 @Suppress("PrivatePropertyName", "DEPRECATION", "UNUSED_PARAMETER")
@@ -58,6 +59,9 @@ class NetworkChangeReceiver : BroadcastReceiver() {
         val networkInfo = connectivityManager.activeNetworkInfo
         if (networkInfo != null && networkInfo.isConnected) {
             Log.d(TAG, "Network Connected")
+            //【新增】网络恢复了 —— 把之前没发出去的失败记录补发一遍。
+            //注意要放在下面「状态未改变就 return」之前，否则网断了又连上这种最常见的情况会被跳过。
+            OfflineRetryWorker.enqueue(context)
             if (networkInfo.type == ConnectivityManager.TYPE_MOBILE) {
                 //移动网络
                 TaskUtils.networkState = 1

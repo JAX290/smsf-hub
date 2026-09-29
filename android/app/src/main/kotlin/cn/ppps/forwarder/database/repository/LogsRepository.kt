@@ -23,6 +23,25 @@ class LogsRepository(private val logsDao: LogsDao) {
 
     fun getOne(id: Long) = logsDao.getOne(id)
 
+    // ===== 【新增】离线待发队列 =====
+
+    /** 取一批「该重试」的失败记录 */
+    @WorkerThread
+    fun getPendingRetry(maxRetry: Int, now: Long, limit: Int): List<Logs> =
+        logsDao.getPendingRetry(maxRetry, now, limit)
+
+    /** 标记已重试，并设置下次最早可重试时间（退避） */
+    @WorkerThread
+    fun markRetried(id: Long, nextRetryAt: Long): Int = logsDao.markRetried(id, nextRetryAt)
+
+    /** 队列里还剩多少条 */
+    @WorkerThread
+    fun countPendingRetry(): Int = logsDao.countPendingRetry()
+
+    /** 清理超限/过老的失败记录 */
+    @WorkerThread
+    fun purgePendingRetry(maxRetry: Int, before: Long): Int = logsDao.purgePendingRetry(maxRetry, before)
+
     fun getIdsByTimeAndStatus(hours: Int, statusList: List<Int>): List<Logs> {
         var sql = "SELECT * FROM Logs WHERE 1=1"
         if (hours > 0) {

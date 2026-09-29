@@ -52,6 +52,7 @@ import cn.ppps.forwarder.utils.Preset
 import cn.ppps.forwarder.utils.ProximitySensorScreenHelper
 import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.SharedPreference
+import cn.ppps.forwarder.workers.OfflineRetryWorker
 import cn.ppps.forwarder.utils.sdkinit.UMengInit
 import cn.ppps.forwarder.utils.sdkinit.XBasicLibInit
 import cn.ppps.forwarder.utils.sdkinit.XUpdateInit
@@ -274,6 +275,15 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
                 //addAction("android.intent.action.DATA_CONNECTION_STATE_CHANGED")
             }
             registerReceiver(networkReceiver, networkFilter)
+
+            //【新增】离线待发队列：启动时补发一次，并注册周期兜底任务。
+            //背景：网络不通、或换服务器后 secret 没对上时，转发记录会停在失败状态，
+            //      原来就永远不会再发。现在交给 OfflineRetryWorker 慢慢捞出来重试。
+            //⚠️ 只在主进程注册：Cactus 保活会在 :cactusRemoteService 里再跑一遍 onCreate。
+            if (SettingUtils.enableOfflineQueue && isMainProcess()) {
+                OfflineRetryWorker.enqueue(this)
+                OfflineRetryWorker.schedulePeriodic(this)
+            }
 
             //监听锁屏&解锁
             val lockScreenReceiver = LockScreenReceiver()

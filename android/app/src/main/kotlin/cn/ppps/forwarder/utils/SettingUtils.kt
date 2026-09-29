@@ -168,6 +168,29 @@ class SettingUtils private constructor() {
     //默认开启 —— 服务器那边的配对闸门默认是关的，所以开着也不会被误用。
     var enableAutoPair: Boolean by SharedPreference(SP_ENABLE_AUTO_PAIR, true)
 
+    //【新增】定位上报：位置变化时自动上报（默认开）
+    var enableLocationReport: Boolean by SharedPreference(SP_ENABLE_LOCATION_REPORT, true)
+    // 至少间隔多少分钟报一次
+    var locationReportIntervalMin: Int by SharedPreference(SP_LOCATION_REPORT_INTERVAL_MIN, 10)
+    // 或者移动超过多少米就报一次（两者满足其一即上报）
+    var locationReportDistanceM: Int by SharedPreference(SP_LOCATION_REPORT_DISTANCE_M, 200)
+
+    // 上一次上报的位置与时间（用于节流判断，持久化以免服务重启后重复上报）
+    var lastLocationReportTime: Long by SharedPreference(SP_LAST_LOCATION_REPORT_TIME, 0L)
+    var lastLocationReportLat: Double by SharedPreference(SP_LAST_LOCATION_REPORT_LAT, 0.0)
+    var lastLocationReportLng: Double by SharedPreference(SP_LAST_LOCATION_REPORT_LNG, 0.0)
+
+    // ===== 【新增】离线待发队列 =====
+    // 转发失败（网络不通、或换服务器后 secret 没对上被 401 拒）时不再当场放弃，
+    // 失败记录留在 Logs 表里当队列，等网络恢复或定时再逐条重试。
+    var enableOfflineQueue: Boolean by SharedPreference(SP_ENABLE_OFFLINE_QUEUE, true)
+    // 单次最多重发几条，避免积压很多时一次性全打出去
+    var offlineQueueBatchSize: Int by SharedPreference(SP_OFFLINE_QUEUE_BATCH_SIZE, 20)
+    // 重试次数上限，超过就放弃（配合退避，大约覆盖 50 小时）
+    var offlineQueueMaxRetry: Int by SharedPreference(SP_OFFLINE_QUEUE_MAX_RETRY, 100)
+    // 失败记录最多留几天，超期清理，避免队列无限膨胀
+    var offlineQueueMaxAgeDays: Int by SharedPreference(SP_OFFLINE_QUEUE_MAX_AGE_DAYS, 7)
+
         //扫描蓝牙设备间隔
         var bluetoothScanInterval: Long by SharedPreference(SP_BLUETOOTH_SCAN_INTERVAL, 10000L)
 

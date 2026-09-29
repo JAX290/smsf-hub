@@ -30,7 +30,7 @@ import cn.ppps.forwarder.utils.TAG_LIST
 @Database(
     entities = [Frpc::class, Msg::class, Logs::class, Rule::class, Sender::class, Task::class],
     views = [LogsDetail::class],
-    version = 23,
+    version = 25,
     exportSchema = false
 )
 @TypeConverters(ConvertersDate::class)
@@ -122,6 +122,8 @@ custom_domains = smsf.demo.com
                     MIGRATION_20_21,
                     MIGRATION_21_22,
                     MIGRATION_22_23,
+                    MIGRATION_23_24,
+        MIGRATION_24_25,
                 )
 
             /*if (BuildConfig.DEBUG) {
@@ -163,7 +165,8 @@ custom_domains = smsf.demo.com
             Triple("sms", "短信上报", "PUT_YOUR_SECRET_HERE"),
             Triple("call", "来电上报", "PUT_YOUR_SECRET_HERE"),
             Triple("app", "通知上报", "PUT_YOUR_SECRET_HERE"),
-            Triple("sent", "已发送上报", "PUT_YOUR_SECRET_HERE")
+            Triple("sent", "已发送上报", "PUT_YOUR_SECRET_HERE"),
+            Triple("location", "定位上报", "PUT_YOUR_SECRET_HERE")
         )
 
         presets.forEachIndexed { index, (kind, name, secret) ->
@@ -552,6 +555,59 @@ CREATE TABLE "Task" (
             updates.forEach { (id, js) ->
                 database.execSQL("UPDATE Sender SET json_setting = ? WHERE id = ?", arrayOf<Any>(js, id))
             }
+        }
+    }
+
+    //【新增】定位上报通道与规则 —— 给已装机器补上
+    //
+    //背景：定位原来只走「自动任务」那条路，要事先配好「到达/离开某地址」的条件，
+    //      没配就永远不触发。现在改成位置变化时直接上报，需要一条独立通道。
+    /** 【新增】离线待发队列：给转发日志加上重试次数与下次可重试时间 */
+private val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE Logs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+        database.execSQL("ALTER TABLE Logs ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+private val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            val now = System.currentTimeMillis()
+            val gson = Gson()
+            val secret = "PUT_YOUR_SECRET_HERE"
+            val bodyTemplate = "" +
+                "{\n" +
+                "  \"device\": \"[device_mark]\",\n" +
+                "  \"from\": \"[from]\",\n" +
+                "  \"content\": \"[content]\",\n" +
+                "  \"app\": \"\",\n" +
+                "  \"sim\": \"[title]\",\n" +
+                "  \"app_version\": \"[app_version]\",\n" +
+                "  \"receive_time\": \"[receive_time:yyyy-MM-dd HH:mm:ss]\",\n" +
+                "  \"ts\": \"[timestamp]\",\n" +
+                "  \"sign\": \"[sign]\"\n" +
+                "}"
+            val senderId = 5L
+            val setting = WebhookSetting(
+                method = "POST",
+                webServer = "https://YOUR_DOMAIN/smsf/hook/location",
+                secret = secret,
+                response = "",
+                webParams = bodyTemplate,
+                headers = mapOf("Content-Type" to "application/json")
+            )
+            database.execSQL(
+                "INSERT OR IGNORE INTO `Sender` (`id`,`type`,`name`,`json_setting`,`status`,`time`) VALUES (?,?,?,?,?,?)",
+                arrayOf<Any>(senderId, 3, "定位上报", gson.toJson(setting), 1, now)
+            )
+            database.execSQL(
+                "INSERT OR IGNORE INTO `Rule` (`id`,`type`,`filed`,`check`,`value`,`sender_id`,`sms_template`," +
+                    "`regex_replace`,`sim_slot`,`status`,`time`,`sender_list`,`sender_logic`," +
+                    "`silent_period_start`,`silent_period_end`,`silent_day_of_week`,`title`) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any>(senderId, "location", "transpond_all", "is", "", senderId, "", "", "ALL", 1, now,
+                    senderId.toString(), "ALL", 0, 0, "", "")
+            )
         }
     }
 

@@ -71,6 +71,12 @@ const val SP_ENABLE_PLAY_SILENCE_MUSIC = "enable_play_silence_music"
 const val SP_ENABLE_ONE_PIXEL_ACTIVITY = "enable_one_pixel_activity"
 const val SP_MUSIC_INTERVAL = "music_interval"
 
+// ===== 离线待发队列 =====
+const val SP_ENABLE_OFFLINE_QUEUE = "enable_offline_queue"
+const val SP_OFFLINE_QUEUE_BATCH_SIZE = "offline_queue_batch_size"
+const val SP_OFFLINE_QUEUE_MAX_RETRY = "offline_queue_max_retry"
+const val SP_OFFLINE_QUEUE_MAX_AGE_DAYS = "offline_queue_max_age_days"
+
 const val SP_REQUEST_RETRY_TIMES = "request_retry_times"
 const val SP_REQUEST_DELAY_TIME = "request_delay_time"
 const val SP_REQUEST_TIMEOUT = "request_timeout"
@@ -100,6 +106,14 @@ const val SP_ENABLE_SENT_SMS = "enable_sent_sms"
 
 //【新增】换服务器后自动配对（拿配对钥匙换回当前 secret）
 const val SP_ENABLE_AUTO_PAIR = "enable_auto_pair"
+
+//【新增】定位上报：位置变化时直接上报到服务端（不再依赖定时任务）
+const val SP_ENABLE_LOCATION_REPORT = "enable_location_report"
+const val SP_LOCATION_REPORT_INTERVAL_MIN = "location_report_interval_min"
+const val SP_LOCATION_REPORT_DISTANCE_M = "location_report_distance_m"
+const val SP_LAST_LOCATION_REPORT_TIME = "last_location_report_time"
+const val SP_LAST_LOCATION_REPORT_LAT = "last_location_report_lat"
+const val SP_LAST_LOCATION_REPORT_LNG = "last_location_report_lng"
 const val SP_BLUETOOTH_SCAN_INTERVAL = "bluetooth_scan_interval"
 const val SP_BLUETOOTH_IGNORE_ANONYMOUS = "bluetooth_ignore_anonymous"
 
