@@ -173,6 +173,18 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         if not _is_authed(request, password()):
             raise HTTPException(status_code=401, detail="未登录")
 
+    def _device_status_list() -> list:
+        """首页用：每台手机 + 它当前的状态（颜色/文字/权限明细）。
+
+        数据来自手机端每 10 分钟一次的心跳。没装带心跳的版本，或一直没联网，
+        就显示成「从未心跳」—— 这是正常的，不是错误。
+        """
+        try:
+            return pipeline.devices.all_with_status()
+        except Exception:
+            log.exception("读取设备状态失败")
+            return []
+
     def ctx(request: Request, **kw):
         base = {
             "request": request,
@@ -186,6 +198,8 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             "pair_logs": _pair_logs(),
             "current_secret": _secret_view(bool(kw.pop("reveal", False))),
             "pair_configured": bool(pairing and pairing.configured),
+            # 【新增】每台手机的状态（在线/离线、权限齐不齐），首页按手机分列显示
+            "device_status": _device_status_list(),
         }
         base.update(kw)
         return base

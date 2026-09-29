@@ -19,6 +19,55 @@ from .models import Incoming
 
 log = logging.getLogger("smsf-hub.pipeline")
 
+# ---- 心跳 ------------------------------------------------------------------
+#  手机端每 10 分钟发一次「我还活着」，带上 App 版本 / 权限是否齐全 / 服务是否在跑。
+#
+#  为什么要这个：光看「最近有没有消息」判断不了死活 ——
+#  手机安静一晚上（没短信没通知）和被系统杀了，在数据上长得一模一样。
+#  心跳是主动信号，能把这俩区分开，面板上就能显示成绿/黄/红。
+#
+#  约定：心跳包用固定的 from 值标记（见手机端 HeartbeatWorker）。
+#  这类包不进归档、不进消息流、不计入消息数，只更新设备状态。
+HEARTBEAT_MARK = "__heartbeat__"
+
+
+def is_heartbeat(msg: Incoming) -> bool:
+    """这条上报是不是心跳包。"""
+    return (msg.sender or "").strip() == HEARTBEAT_MARK \
+        or (msg.app or "").strip() == HEARTBEAT_MARK
+
+
+# 手机端把负载写成一行（见 HeartbeatWorker.buildPayload）：
+#     HBT|版本名|版本号|sms=1,call=1,notify=1,location=1|working=1
+#
+# 为什么不直接发 JSON：WebhookUtils 会把 content 套进用户配置的模板里，
+# 套完 JSON 结构就散了。用这种行格式即使被前后包了别的内容，也能正则捞出来。
+HEARTBEAT_RE = re.compile(r"HBT\|([^|]*)\|([^|]*)\|([^|]*)\|working=(\d)")
+
+
+def parse_heartbeat(content: str) -> dict:
+    """把心跳负载解析成 update_heartbeat 要的 dict。解析不了就返回空。"""
+    m = HEARTBEAT_RE.search(content or "")
+    if not m:
+        return {}
+    ver, code, perms_s, working = m.group(1), m.group(2), m.group(3), m.group(4)
+    perms = {}
+    for item in (perms_s or "").split(","):
+        if "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        perms[k.strip()] = v.strip() == "1"
+    try:
+        code_i = int(code)
+    except Exception:
+        code_i = 0
+    return {
+        "version": ver.strip(),
+        "code": code_i,
+        "perms": perms,
+        "working": working == "1",
+    }
+
 # ---- 手机端上报格式的兼容处理 ----------------------------------------------
 # SmsForwarder 转发「应用通知」时，默认模板和短信几乎一样：
 #   type 仍是 sms、应用包名塞在 sender 里、正文里带「UID：」行。
@@ -152,10 +201,23 @@ class Pipeline:
             # 先把手机上报的原始设备值留一份：devices.touch 之后 device 会被换成
             # 用户可改的备注，而归档目录名需要的是稳定标识（设备 ID 不会变）。
             raw_device = msg.device
-            rec = self.devices.touch(raw_device, source_ip)
+            _hb = is_heartbeat(msg)
+            rec = self.devices.touch(raw_device, source_ip,
+                                     kind="heartbeat" if _hb else "message")
             self.stats["devices"] = self.devices.count()
             msg.device = rec.get("remark") or rec["label"]
             msg.raw["_device_raw"] = raw_device
+
+            # 【新增】心跳：更新设备状态后立即返回，不往下走归档/合并/分发
+            if _hb:
+                status = parse_heartbeat(payload.get("content") or "")
+                if not status:
+                    log.warning("心跳负载解析失败（设备 %s），按空状态处理", raw_device)
+                self.devices.update_heartbeat(raw_device, status)
+                self.stats["heartbeats"] = self.stats.get("heartbeats", 0) + 1
+                log.info("收到心跳：设备=%s 版本=%s 权限=%s",
+                         raw_device, status.get("version", "?"), status.get("perms", {}))
+                return {"status": "heartbeat", "received": self.stats["received"]}
         except Exception:
             log.exception("手机登记失败")
 

@@ -1,6 +1,40 @@
 {% extends "base.html" %}
 {% block body %}
 {% set g = apk_gate %}
+
+{# ===== 手机状态（心跳）=====
+   每台手机一行：状态灯 + 名字 + 文字说明 + 权限明细。
+   数据来自手机端每 10 分钟一次的心跳；没装带心跳的版本会显示「从未心跳」。 #}
+{% if device_status %}
+<div class="card" style="margin-bottom:12px">
+  <h2>手机（{{ device_status|length }} 台）</h2>
+  {% for d in device_status %}
+  {% set st = d.status %}
+  <div class="devbar {{ st.level }}">
+    <span class="dot"></span>
+    <div>
+      <div class="t">
+        {{ d.remark or d.label or d.key }}
+        <span class="badge {% if st.level == 'ok' %}b-ok{% elif st.level == 'warn' %}b-warn{% elif st.level == 'offline' %}b-bad{% else %}b-off{% endif %}">{{ st.text }}</span>
+      </div>
+      <div class="s">
+        {% if d.app_version %}{{ d.app_version }}{% endif %}
+        {% if d.version_code %}（{{ d.version_code }}）{% endif %}
+        {% if st.detail %}· {{ st.detail }}{% endif %}
+      </div>
+    </div>
+    {% if d.perms %}
+    <div class="perms">
+      <span class="{{ 'on' if st.perms.sms else 'off' }}">短信</span>
+      <span class="{{ 'on' if st.perms.call else 'off' }}">通话</span>
+      <span class="{{ 'on' if st.perms.notify else 'off' }}">通知</span>
+      <span class="{{ 'on' if st.perms.location else 'off' }}">定位</span>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 <div class="apkbar {{ 'on' if g.on else 'off' }}">
   <span class="dot"></span>
   <div>
