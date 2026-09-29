@@ -102,10 +102,48 @@ else
     bad "没配上报域名（server.phone_base_url 为空）"
 fi
 if [ -n "$dldir" ]; then
-    if [ -d "$dldir" ]; then ok "APK 下载目录存在：$dldir"
-    else bad "APK 下载目录不存在：$dldir（跑 install.sh 会创建）"; fi
+    if [ -d "$dldir" ]; then
+        ok "APK 下载目录存在：$dldir"
+        # 目录建好只是第一步 —— 里面得真有包，/apk1 才下得动。
+        # 换 VPS 后最容易漏的就是「跑了 install.sh 但没跑 publish_apk.py」。
+        apks=$(ls "$dldir"/*.apk 2>/dev/null | wc -l)
+        if [ "$apks" -gt 0 ]; then
+            ok "下载目录里有 $apks 个安装包"
+            for f in "$dldir"/*.apk; do
+                [ -e "$f" ] || continue
+                sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
+                printf "         %6.1f MB  %s\n" "$(awk "BEGIN{print $sz/1048576}")" "$(basename "$f")"
+            done
+        else
+            bad "下载目录是空的！/apk1 会下不到文件。
+        在本机跑：python deploy/publish_apk.py
+        （源码仓库里没有 APK，它是二进制产物，必须单独上传）"
+        fi
+    else
+        bad "APK 下载目录不存在：$dldir（跑 install.sh 会创建）"
+    fi
 else
     warn "没配 panel.apk_download_dir，publish_apk.py 会没法上传"
+fi
+
+# 拒绝页（下载被关时显示的那一页）
+GATE_ROOT="/var/www/smsf-gate"
+if [ -f "$GATE_ROOT/__apk_denied.html" ]; then
+    ok "下载拒绝页存在"
+else
+    warn "没有 $GATE_ROOT/__apk_denied.html（跑 install.sh 会生成）—— 闸门关闭时下载会显示 nginx 默认错误页"
+fi
+
+# nginx 片段里是否带了 /apk 那几条（换 VPS 后容易只贴了 /smsf/hook）
+if [ -f deploy/nginx-smsf.filled.conf ]; then
+    if grep -q "location = /apk1" deploy/nginx-smsf.filled.conf; then
+        ok "nginx 片段包含 /apk1（安装包下载地址）"
+        if grep -q "__DL_SLUG__\|__PANEL_HOST__" deploy/nginx-smsf.filled.conf; then
+            warn "片段里还有未替换的占位符，重新跑 install.sh"
+        fi
+    else
+        warn "nginx 片段里没有 /apk1 —— 换 VPS 后安装包下载地址会不可用"
+    fi
 fi
 case "$window" in
     ''|0)  warn "读不到去重窗口" ;;

@@ -251,13 +251,58 @@ PYEOF2
     echo "   -> 下载目录：$DL_DIR"
 fi
 
-echo "[6/8] 生成 nginx 片段（IP 和端口已填好）"
+echo "[6/8] 准备下载目录 + 生成 nginx 片段"
+
+# 下载目录名的随机串（目录形如 /var/www/smsf-dl-<这一串>）。
+# config.yaml 已存在时 DL_DIR 是从配置里读回来的，这里从它反推。
+DL_SLUG="${DL_DIR##*/smsf-dl-}"
+GATE_ROOT="/var/www/smsf-gate"
+
+mkdir -p "$DL_DIR" "$GATE_ROOT"
+chmod 755 "$DL_DIR" "$GATE_ROOT"
+
+# 下载被拒时显示的页面（nginx 的 __apk_denied.html 指向这里）
+cat > "$GATE_ROOT/__apk_denied.html" <<'DENIED'
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>下载未开启</title>
+<style>
+ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+      background:#0f1115;color:#e6e6e6;font:16px/1.7 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+ .box{max-width:420px;padding:32px 28px;text-align:center}
+ h1{margin:0 0 12px;font-size:20px;font-weight:600}
+ p{margin:0;color:#9aa0a6;font-size:14px}
+</style></head><body>
+<div class="box">
+  <h1>下载未开启</h1>
+  <p>安装包下载当前是关闭的。<br>请在管理面板首页点一下「授权」，然后再刷新本页。</p>
+</div></body></html>
+DENIED
+echo "   -> 下载目录   : $DL_DIR"
+echo "   -> 拒绝页目录 : $GATE_ROOT"
+
 PANEL_PORT=$("$PY" -c "import yaml;print((yaml.safe_load(open('/opt/smsf-hub/config.yaml',encoding='utf-8')).get('server') or {}).get('panel_port',8702))" 2>/dev/null || echo 8702)
-sed -e "s|__PANEL_HOST__|$TS_IP|g" -e "s|__PANEL_PORT__|$PANEL_PORT|g" \
+
+# 把模板里的占位符全部替换掉，生成可直接粘贴的片段
+sed -e "s|__PANEL_HOST__|$TS_IP|g" \
+    -e "s|__PANEL_PORT__|$PANEL_PORT|g" \
+    -e "s|__DL_SLUG__|$DL_SLUG|g" \
+    -e "s|__GATE_ROOT__|$GATE_ROOT|g" \
     "$APP_DIR/deploy/nginx-smsf.conf" > "$APP_DIR/deploy/nginx-smsf.filled.conf"
+
+if grep -q '__[A-Z_]\{2,\}__' "$APP_DIR/deploy/nginx-smsf.filled.conf"; then
+    echo "   ⚠️ 生成的片段里还有没替换掉的占位符，请检查："
+    grep -o '__[A-Z_]\{2,\}__' "$APP_DIR/deploy/nginx-smsf.filled.conf" | sort -u | sed 's/^/       /'
+fi
+
 echo "   -> $APP_DIR/deploy/nginx-smsf.filled.conf"
-echo "      把这个文件里的 location 段加进你的站点配置，然后："
-echo "      nginx -t && systemctl reload nginx"
+echo "      把这个文件里的 location 段加进你的站点配置（注意保留缩进），然后："
+echo "         nginx -t && systemctl reload nginx"
+echo
+echo "   ⚠️ 别漏了最后一步：APK 文件不随代码仓库分发，"
+echo "      必须在本机跑一次 python deploy/publish_apk.py 把三个包传上来，"
+echo "      否则 /apk1 /apk2 /apk3 会指向空目录（下不到文件）。"
 
 echo "[7/8] 安装 systemd 服务"
 install -m 644 "$APP_DIR/deploy/smsf-hub.service" /etc/systemd/system/smsf-hub.service
