@@ -12,24 +12,24 @@
 server:
   # 手机上报入口。
   # ⚠️ 只绑 127.0.0.1 —— 外部必须经过 nginx 反代，公网无法直接访问这个端口。
-  # 手机实际填的地址是： https://status2.mulinsen.win/smsf/hook
+  # 手机实际填的地址形如： https://你的域名/smsf/hook
   listen_host: "127.0.0.1"
   listen_port: 8701
   # nginx 反代时的路径前缀（要和 /etc/nginx 里配的一致）
   url_prefix: "/smsf"
 
   # 控制面板。⚠️ 只绑 Tailscale IP —— 只有你自己的 Tailscale 网络能打开。
-  # 8789 / 8790 都被你其它项目占用，8701-8710 实测全空闲。
-  panel_host: "100.118.119.84"
+  # 填你自己的 Tailscale IP（服务器上执行 tailscale ip -4 可以查到）。
+  panel_host: "100.x.y.z"
   panel_port: 8702
 
   # 生成「下载归档」链接时用的外部地址（填你的域名或 Tailscale 地址）
-  public_base_url: "https://status2.mulinsen.win/smsf"
+  public_base_url: "https://你的域名/smsf"
   # ⚠️ 手机端要填的上报地址前缀（会显示在面板的「自测/手机配置」页里）
-  # 这是 DNS 直连源站的域名，不走 Cloudflare
-  phone_base_url: "https://notic.mulinsen.win/smsf/hook"
+  # 建议用 DNS 直连源站的域名，不要走 Cloudflare（否则源 IP 会暴露、也可能被拦）
+  phone_base_url: "https://你的域名/smsf/hook"
   # 面板地址（只给你的 Tailscale 用）
-  panel_url: "http://100.118.119.84:8702"
+  panel_url: "http://100.x.y.z:8702"
 
 # ------------------------------------------------------------------------------
 # 安全：手机与服务端之间的鉴权
@@ -78,8 +78,15 @@ security:
 # ------------------------------------------------------------------------------
 dedup:
   enable: true
-  window_seconds: 60        # 60 秒内，同样的「来源+发件人+内容」只算一次
-  max_entries: 5000         # 内存中最多记住多少条指纹
+  # ⚠️ 这个窗口不要调太小。
+  #    手机端有「离线待发队列」：网络不通或换服务器后没配对成功时，
+  #    失败的消息会存下来，等网络恢复自动重发。重试间隔是退避的，
+  #    最长到 10 分钟。窗口如果只有 60 秒，这些重发就会落到窗口外，
+  #    于是「服务端其实早就收到、只是当时响应超时」的消息会被重复记录一遍。
+  #    900 秒可以覆盖整个退避过程。
+  #    指纹里不含时间戳，所以放大窗口不会误伤真正不同的消息。
+  window_seconds: 900
+  max_entries: 20000        # 内存中最多记住多少条指纹
 
 # ------------------------------------------------------------------------------
 # 合并发送：短时间内多条消息合并成一条再推送（避免刷屏，也绕开渠道限流）
@@ -97,16 +104,24 @@ merge:
 archive:
   enable: true
   root: "/opt/smsf-hub/app/data/archive"
-  # 目录结构： 类型 / 主题 / 日期.md
-  #   例：    短信/1069xxxx/2026-09-22.md
-  #           APP通知/微信/2026-09-22.md
-  #           来电/13800138000/2026-09-22.md
+  # 目录结构： 设备 / 类型 / 主题 / 日期.md
+  #   例：    SF-B7AEFBF931/短信/1069xxxx/2026-09-22.md
+  #           SF-B7AEFBF931/APP通知/微信/2026-09-22.md
+  #           SF-B7AEFBF931/来电/13800138000/2026-09-22.md
+  #           SF-B7AEFBF931/定位/2026-09-22.md      ← subject_rules 为 none，少一层
+  #
+  # 第一层是「设备」，用的是手机上报时带的稳定设备 ID（形如 SF-XXXXXXXX），
+  # 不是可改的备注名 —— 否则你把「红米」改成「小米」会把同一台机器拆成两组。
+  # 设备备注在面板「终端」页里改。
+  #
   # 「主题」取什么值，见下面 subject_rules
   subject_rules:
     sms: "sender"           # 短信：按发件人号码分主题
     call: "sender"          # 来电：按来电号码分主题
-    notify: "app"            # APP通知：按应用名分主题
+    notify: "app"           # APP通知：按应用名分主题
+    sent: "sender"          # 已发送短信：按收件人号码分主题
     location: "none"        # 定位：不分主题，直接以日期归档
+                            # 可选值：sender(发件人/号码) / app(应用名) / none(不分主题)
 
   # 单文件大小上限（MB）。超过就滚动成 2026-09-22.part2.md，避免一个文件无限变大
   file_max_mb: 5
@@ -228,7 +243,7 @@ panel:
   recent_keep: 500
 
   # 安装包（APK）下载总开关。
-  # false = 外部访问 notic.mulinsen.win/apk1、apk2、apk3 一律返回「下载未开启」；
+  # false = 外部访问 你的域名/apk1、apk2、apk3 一律返回「下载未开启」；
   # true  = 允许下载。
   # 在面板「参数设置 → 面板」里也能改，改完立即生效，不用重启服务。
   apk_download_enabled: false
