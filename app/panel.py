@@ -304,13 +304,21 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
 
     @router.post("/panel/pair-open")
     async def pair_open(request: Request, mode: str = Form(""), amount: str = Form("")):
-        """开启配对闸门：限时 / 一直开到配对成功。"""
+        """开启配对闸门。
+
+        三种模式：
+          minutes         限时（默认 30 分钟）
+          until_paired    一直开到手机取回 secret
+          until_connected 一直开到手机真的上报成功（推荐，用户要求的行为）
+        """
         guard(request)
         if not pairing or not pairing.configured:
-            log.warning("尝试开启配对，但未配置 security.pair_key")
+            # 只要 config.yaml 里填了上报域名，就能从域名派生钥匙，
+            # 所以正常部署下不该走到这里。
+            log.warning("尝试开启配对，但配对功能不可用（缺 pair_key 且无法从域名派生）")
             return RedirectResponse("/panel/?pair_err=nokey", status_code=303)
-        if mode == "until_paired":
-            pairing.open("until_paired")
+        if mode in ("until_paired", "until_connected"):
+            pairing.open(mode)
         else:
             try:
                 n = max(1, min(1440, int(float(amount or 30))))

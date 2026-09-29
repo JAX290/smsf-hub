@@ -22,11 +22,17 @@ import logging
 import time
 from pathlib import Path
 
+from .verify import derive_pair_key, extract_host
+
 log = logging.getLogger("smsf-hub.pairing")
 
 # 合法状态。注意：state() 里必须对每一个值都有显式分支，
 # 不能依赖「掉到最后兜底」——那正是之前那个漏洞的来源。
-MODES = ("off", "minutes", "until_paired")
+MODES = ("off", "minutes", "until_paired", "until_connected")
+
+# 配对成功之后，还要等「真实上报成功」才算连接建立 —— 这个语义对应
+# until_connected 模式（用户明确要求的：等成功建立连接之后再关闭闸门）。
+# until_paired 保留为旧行为（配对成功即关）。
 
 
 class Pairing:
@@ -50,7 +56,31 @@ class Pairing:
 
     @property
     def pair_key(self) -> str:
+        """手工配置的配对钥匙（可选，留空表示只用域名派生）。"""
         return str(self.cfg.get("security.pair_key", "") or "")
+
+    @property
+    def derived_key(self) -> str:
+        """从上报域名派生的配对钥匙。
+
+        域名焊死在 APK 里、换 VPS 时不变，所以两边算出来的一定一致 ——
+        这就是「换 VPS 不需要传任何东西」的实现基础。
+        """
+        domain = extract_host(str(self.cfg.get("server.phone_base_url", "") or ""))
+        return derive_pair_key(domain)
+
+    def valid_keys(self) -> list[str]:
+        """配对时接受哪些钥匙。
+
+        同时接受手工配置的和域名派生的，是为了平滑过渡：
+        已经装好的旧 APK 里烧的是手工配置那把，换到新服务器后仍然能配上；
+        新编译的 APK 会优先试域名派生那把，于是换 VPS 零操作。
+        """
+        keys = []
+        for k in (self.pair_key, self.derived_key):
+            if k and k not in keys:
+                keys.append(k)
+        return keys
 
     @property
     def rate_limit(self) -> int:
@@ -61,8 +91,12 @@ class Pairing:
 
     @property
     def configured(self) -> bool:
-        """配对钥匙有没有配上。没配就整个功能不可用。"""
-        return len(self.pair_key) >= 16
+        """配对功能可不可用。
+
+        只要能用域名派生出一把钥匙就算可用 —— 也就是说，
+        只要 config.yaml 里填了上报域名，配对天然可用，不需要额外配置。
+        """
+        return any(len(k) >= 16 for k in self.valid_keys())
 
     # ---------------- 闸门状态 ----------------
 
@@ -116,16 +150,26 @@ class Pairing:
                     "text": "已开启（限时）",
                     "detail": "还剩 %d 分 %d 秒，到点自动关闭" % (int(left) // 60, int(left) % 60)}
 
-        # until_paired
-        return {"on": True, "mode": "until_paired", "configured": True,
-                "text": "已开启（直到配对成功）",
-                "detail": "手机配对成功后会立即自动关闭"}
+        # until_paired：配对成功即关
+        if mode == "until_paired":
+            return {"on": True, "mode": "until_paired", "configured": True,
+                    "text": "已开启（直到配对成功）",
+                    "detail": "手机取回 secret 后立即自动关闭"}
+
+        # until_connected：等手机真的用新 secret 上报成功才关（推荐）
+        pend = self.pending()
+        extra = ""
+        if pend:
+            extra = "；已有设备（%s）取走了 secret，正等它上报成功" % (pend.get("device") or "?")
+        return {"on": True, "mode": "until_connected", "configured": True,
+                "text": "已开启（直到真正连上）",
+                "detail": "手机取回 secret 并成功上报一次后，才会自动关闭" + extra}
 
     def open(self, mode: str, minutes: int = 30) -> dict:
         """开闸。mode: minutes / until_paired。"""
-        if mode == "until_paired":
-            self._write_gate({"mode": "until_paired", "opened_at": time.time()})
-            log.info("配对闸门已开启（直到配对成功）")
+        if mode in ("until_paired", "until_connected"):
+            self._write_gate({"mode": mode, "opened_at": time.time()})
+            log.info("配对闸门已开启（%s）", "直到配对成功" if mode == "until_paired" else "直到真正连上")
         else:
             minutes = max(1, min(1440, int(minutes)))
             self._write_gate({"mode": "minutes", "opened_at": time.time(),
@@ -160,6 +204,50 @@ class Pairing:
         return True, "ok"
 
     # ---------------- 配对成功 ----------------
+
+    # ---------------- 等待「真正连上」 ----------------
+
+    def mark_pending(self, device: str) -> None:
+        """记录「某设备刚取走 secret，正等它上报成功」。
+
+        只有 until_connected 模式用得上：配对本身不算数，
+        要等这个设备真的发上来一条能通过校验的消息，才算连接建立。
+        """
+        try:
+            self._write_gate({
+                "mode": "until_connected",
+                "opened_at": self._read_gate().get("opened_at") or time.time(),
+                "pending_device": device or "",
+                "pending_at": time.time(),
+            })
+        except Exception as exc:
+            log.warning("记录待连接设备失败: %s", exc)
+
+    def pending(self) -> dict:
+        """当前在等哪个设备连上来（没有则空 dict）。"""
+        st = self._read_gate()
+        if st.get("mode") != "until_connected":
+            return {}
+        dev = str(st.get("pending_device") or "")
+        return {"device": dev, "at": st.get("pending_at") or 0} if dev else {}
+
+    def on_connected(self, device: str) -> bool:
+        """有设备成功上报了。若是我们在等的那个，就关闸。
+
+        返回 True 表示这次上报促成了关闸。
+        """
+        st = self._read_gate()
+        if st.get("mode") != "until_connected":
+            return False
+        want = str(st.get("pending_device") or "")
+        # 设备名可能因为用户在面板改备注而变，所以宽松匹配：
+        # 只要之前记录过某个设备在等，就认这一次上报。
+        # （闸门本来就只开一小会儿，这里不必也不可能做到绝对精确）
+        if want and device and want != device:
+            log.info("设备 %s 上报成功，但闸门在等的是 %s —— 不关", device, want)
+            return False
+        self.close("设备 %s 已成功上报，连接建立" % (device or "?"))
+        return True
 
     def log_success(self, device: str, ip: str, note: str = "") -> dict:
         entry = {

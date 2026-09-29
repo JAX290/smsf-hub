@@ -129,6 +129,17 @@ def create_app(config_path: str | None = None) -> FastAPI:
         client_ip = real_ip or (request.client.host if request.client else "")
 
         result = await pipeline.handle(payload, client_ip)
+
+        # 【新增】真的上报成功了 —— 如果配对闸门是「等真正连上」模式，
+        # 到这一刻才算连接建立，可以关闸了。
+        # 用上报里的 device 字段判断是不是我们等的那个设备。
+        try:
+            dev = str(payload.get("device") or "").strip()
+            if pairing.on_connected(dev):
+                log.info("配对闸门已因「设备成功上报」自动关闭（设备=%s）", dev or "?")
+        except Exception as exc:  # 关闸失败不能影响上报本身
+            log.warning("自动关闸检查出错: %s", exc)
+
         return JSONResponse(result)
 
     @app.post("/smsf/hook")
@@ -199,19 +210,46 @@ def create_app(config_path: str | None = None) -> FastAPI:
             log.warning("配对请求时间戳无效（%s），来自 %s", ts_msg, ip)
             raise HTTPException(status_code=401, detail=ts_msg)
 
-        # 3) 签名
-        if not verify_pair_sign(pairing.pair_key, ts, device, sign):
-            log.warning("配对签名校验失败，来自 %s（设备 %s）", ip, device or "未知")
+        # 3) 签名 —— 逐个候选钥匙试
+        #
+        #    候选有两把：
+        #      · 手工配置的 security.pair_key（旧 APK 里烧的就是这个）
+        #      · 从上报域名派生的（新 APK 优先用这个，换 VPS 零操作）
+        #    两把都试，是为了让「已经装好的旧 APK」和「新装的 APK」
+        #    在同一个服务器上都能配上对，平滑过渡。
+        keys = pairing.valid_keys()
+        if not keys:
+            log.error("配对功能不可用：既没配 pair_key，也无法从 phone_base_url 派生")
+            raise HTTPException(status_code=500, detail="服务器未配置配对能力")
+
+        matched = None
+        for k in keys:
+            if verify_pair_sign(k, ts, device, sign):
+                matched = k
+                break
+        if matched is None:
+            log.warning("配对签名校验失败（试了 %d 把钥匙），来自 %s（设备 %s）",
+                        len(keys), ip, device or "未知")
             raise HTTPException(status_code=401, detail="配对签名校验失败")
 
-        # 4) 通过：发回 secret，关闸，留痕，通知
+        # 4) 通过：发回 secret，留痕，通知
         secret = str(cfg.get("security.secret", ""))
         if not secret:
             raise HTTPException(status_code=500, detail="服务器未配置 secret")
         entry = pairing.log_success(device, ip)
-        pairing.close("配对成功")
+
+        # 5) 闸门怎么关，看模式：
+        #      until_paired    —— 配对成功即关（旧行为）
+        #      until_connected —— 记录下来，等这个设备真的上报成功才关
+        st = pairing.state()
+        if st.get("mode") == "until_connected":
+            pairing.mark_pending(device)
+            log.info("已向设备 %s 下发 secret，等它上报成功后再关闸", device or "未知")
+        else:
+            pairing.close("配对成功")
+            log.info("已向设备 %s 下发 secret，配对闸门关闭", device or "未知")
+
         await _notify_paired(entry)
-        log.info("已向设备 %s 下发 secret，配对闸门关闭", device or "未知")
         return JSONResponse({"ok": True, "secret": secret, "paired_at": entry["at"]})
 
     # 方便本地自测（nginx 之外直连时用）

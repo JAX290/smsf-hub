@@ -71,14 +71,25 @@
         <button type="submit" class="go">开启</button>
       </form>
       <form method="post" action="/panel/pair-open">
-        <input type="hidden" name="mode" value="until_paired">
-        <button type="submit" class="go">开启到匹配成功</button>
+        <input type="hidden" name="mode" value="until_connected">
+        <button type="submit" class="go">开启到真正连上</button>
       </form>
-      <span>「开启到匹配成功」会一直开着，手机配上的那一刻自动关闭</span>
+      <form method="post" action="/panel/pair-open">
+        <input type="hidden" name="mode" value="until_paired">
+        <button type="submit" class="ghost">开启到取回密钥</button>
+      </form>
+      <span>
+        <b>换服务器推荐用「开启到真正连上」</b>：一直开着，直到有手机
+        <b>成功上报一条消息</b>才自动关闭 —— 比「取回密钥就关」更稳，
+        因为取走密钥不等于真的能上报。
+      </span>
     </div>
     {% else %}
     <div class="addrs">
-      还没配置配对钥匙。去「<a href="/panel/settings">参数设置 → 安全</a>」填上 <code>security.pair_key</code>，重启服务后启用。
+      配对不可用：config.yaml 里既没有 <code>security.pair_key</code>，
+      也没法从 <code>server.phone_base_url</code> 派生。
+      去「<a href="/panel/settings">参数设置</a>」把<b>上报域名</b>填上即可 ——
+      域名填好后配对自动可用，不需要额外配置钥匙。
     </div>
     {% endif %}
 
