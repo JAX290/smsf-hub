@@ -22,7 +22,7 @@ DEFAULTS: dict[str, Any] = {
         "extra_token_header": "",
         "extra_token_value": "",
     },
-    "dedup": {"enable": True, "window_seconds": 60, "max_entries": 5000},
+    "dedup": {"enable": True, "window_seconds": 900, "max_entries": 20000},
     "merge": {
         "enable": True,
         "window_seconds": 60,
