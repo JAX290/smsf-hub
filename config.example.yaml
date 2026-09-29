@@ -237,6 +237,11 @@ panel:
   title: "短信转发中枢"
   # 面板登录口令（Tailscale 之外再加一道）
   password: "请改成你自己的口令"
+
+  # APK 下载目录（服务器上的绝对路径）。
+  # 由 deploy/install.sh 自动生成一个带随机串的名字（避免被人猜到路径直接抓包），
+  # deploy/publish_apk.py 会读这一项来决定往哪传。
+  apk_download_dir: ""
   # 每页显示多少条记录
   page_size: 50
   # 面板上"最近消息"保留多少条

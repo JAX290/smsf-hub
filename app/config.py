@@ -13,8 +13,10 @@ DEFAULTS: dict[str, Any] = {
         "listen_port": 8788,
         "panel_host": "127.0.0.1",
         "panel_port": 8790,
+        # 下面这两个由 deploy/install.sh 在安装时问你（或自动探测）后填入，
+        # 这里故意留空 —— 不写死任何具体域名，换服务器时不用改代码。
         "public_base_url": "",
-        "phone_base_url": "https://notic.mulinsen.win/smsf/hook",
+        "phone_base_url": "",
     },
     "security": {
         "secret": "",

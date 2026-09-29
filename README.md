@@ -120,7 +120,78 @@ sudo bash deploy/install.sh
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 4. 更新 APK 下载地址（容易漏）
+### 4. 换 VPS 怎么办（一键搬迁）
+
+这是本项目的常见操作，所以专门做了支持。**环境信息不写死在代码里**，
+该自动探测的自动探测，探测不出来的在安装时问你。
+
+**搬迁前，在旧机器上记下这三个值**（第一次部署时脚本会打印）：
+
+```
+手机端 secret
+配对钥匙 pair_key
+面板登录口令
+```
+
+**然后在新机器上：**
+
+```bash
+sudo git clone <本仓库地址> /opt/smsf-hub
+cd /opt/smsf-hub
+
+SMSF_SECRET=<旧secret> \
+SMSF_PAIR_KEY=<配对钥匙> \
+sudo -E bash deploy/install.sh
+```
+
+带上 secret 和配对钥匙，**手机端完全不用动** —— 它会自动配对、取回新 secret，
+并把断网期间积压的消息补发出去。
+
+**安装过程会问两件事**（也可以提前用环境变量给，实现无人值守）：
+
+| 问什么 | 能不能自动探测 | 怎么给 |
+|---|---|---|
+| 面板绑哪个 IP | ✅ 自动跑 `tailscale ip -4` 探测 | `SMSF_HOST=` |
+| 上报域名 | ❌ 取决于你的 DNS，只能问 | `SMSF_DOMAIN=` |
+
+**其余的自己生成，不用管**：APK 下载目录（随机名）、secret/配对钥匙/口令（没有就随机）。
+
+**用环境变量全部给足**（适合脚本化）：
+
+```bash
+SMSF_HOST=$(tailscale ip -4) \
+SMSF_DOMAIN=notic.example.com \
+SMSF_SECRET=<旧secret> \
+SMSF_PAIR_KEY=<配对钥匙> \
+SMSF_NONINTERACTIVE=1 \
+sudo -E bash deploy/install.sh
+```
+
+也可以把变量写进 `deploy/install.env`（脚本会自动读，**该文件不进仓库**）。
+
+**装完跑一次自检**，它会逐项确认该改的都改了：
+
+```bash
+bash deploy/selfcheck.sh
+```
+
+典型输出：
+
+```
+── 3. Tailscale ──
+  [OK]   tailscale0 网卡上有地址 100.x.y.z
+── 4. 配置项 ──
+  [OK]   上报地址：https://notic.example.com/smsf/hook
+  [OK]   去重窗口 900 秒
+...
+ 结果：13 项正常 · 0 项注意 · 0 项有问题
+```
+
+> **它最容易抓出的一类问题**：换了 VPS 但 `panel_host` 还是旧 IP、
+> 或者 Tailscale 重启后网卡没拿到地址 —— 这两种都会让面板整个打不开，
+> 而外面看「服务明明是 active 的」，很难排查。
+
+### 5. 更新 APK 下载地址（容易漏）
 
 ⚠️ **「部署服务端」和「更新 APK」是两件独立的事。**
 只跑 `install.sh` 的话，下载地址给到的还是旧版本。发布新版本要再跑一次：

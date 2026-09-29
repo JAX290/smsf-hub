@@ -2,7 +2,8 @@
 
 同一个 app 实例会被两个 uvicorn 监听器共用（见 run.py）：
   * ingest 监听 127.0.0.1:8701  —— 只给 nginx 反代用，公网直接访问不到
-  * panel  监听 100.118.119.84:8702 —— 只有 Tailscale 网络内能开
+  * panel  监听 config.yaml 里的 server.panel_host:panel_port
+            通常绑的是 Tailscale IP —— 只有你自己的 tailnet 能打开
 """
 from __future__ import annotations
 

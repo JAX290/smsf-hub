@@ -16,8 +16,13 @@
   <div class="links">
     {% if g.on %}
     <div class="addrs">
-      下载地址：<code>notic.mulinsen.win/apk1</code> 华为 nova6 ·
+      {% if dl_host %}
+      下载地址：<code>{{ dl_host }}/apk1</code> arm64 ·
       <code>apk2</code> 通用 · <code>apk3</code> 32 位
+      {% else %}
+      下载地址：<code>/apk1</code> arm64 · <code>/apk2</code> 通用 · <code>/apk3</code> 32 位
+      （在【参数设置】里填好上报域名后，这里会显示完整地址）
+      {% endif %}
     </div>
     {% endif %}
     <div class="grants">

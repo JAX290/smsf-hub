@@ -50,6 +50,11 @@ deploy/_dl_index.html
 # 手机端源码里被脱敏的真实值（secret / 配对钥匙 / 域名）
 .android_secrets
 
+# 换 VPS 时用的本地环境信息（真实 IP / 域名，不进仓库）
+deploy/install.env
+deploy/.remote_target
+deploy/nginx-smsf.filled.conf
+
 # Android 构建产物（仓库里只放源码）
 android/build/
 android/app/build/

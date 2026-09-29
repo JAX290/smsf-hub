@@ -16,8 +16,14 @@
 ⚠️ 常见误解：
     「部署服务端」和「更新 APK」是两件独立的事。
     换 VPS 时只跑 install.sh，下载地址给到的还是旧版本 —— 必须再跑一次本脚本。
+
+服务器地址怎么给（换 VPS 后只改这一处）：
+    优先读环境变量：  set SMSF_HOST=100.x.y.z
+    或者写进 deploy/.remote_target（这个文件不进仓库）
+下载目录和域名不用你填 —— 连上服务器后自动从 config.yaml 里读。
 """
 import os
+import re
 import sys
 import json
 import hashlib
@@ -30,11 +36,44 @@ except ImportError:
     print("需要 paramiko：  pip install paramiko")
     sys.exit(1)
 
-HOST = "100.118.119.84"
 USER = "root"
-DL_DIR = "/var/www/smsf-dl-e49cadd1bfb0d24ee8"
 APK_SRC = Path(r"C:\AndroidDev\SmsForwarder\build\app\outputs\apk\debug")
 HASH_FILE = Path(__file__).resolve().parent.parent / ".apk_hashes.json"
+TARGET_FILE = Path(__file__).resolve().parent / ".remote_target"
+
+
+def resolve_host() -> str:
+    """服务器地址：环境变量优先，其次 deploy/.remote_target（不进仓库）。"""
+    host = (os.environ.get("SMSF_HOST") or "").strip()
+    if host:
+        return host
+    if TARGET_FILE.exists():
+        host = TARGET_FILE.read_text(encoding="utf-8").strip()
+        if host:
+            print("（服务器地址取自 deploy/.remote_target）")
+            return host
+    print("请指定服务器地址，二选一：")
+    print("    set SMSF_HOST=<Tailscale IP 或主机名>")
+    print("    或写进  deploy\\.remote_target")
+    print()
+    print("换 VPS 后只需要改这一处；下载目录和域名会自动从服务器上读。")
+    sys.exit(1)
+
+
+def remote_config(cli) -> dict:
+    """从服务器上的 config.yaml 读需要的几项，省得在本地重复维护。"""
+    _, out, err = cli.exec_command(
+        "cd /opt/smsf-hub && ./venv/bin/python -c "
+        "\"import yaml,json;d=yaml.safe_load(open('config.yaml',encoding='utf-8'));"
+        "print(json.dumps({'dl':(d.get('panel') or {}).get('apk_download_dir',''),"
+        "'url':(d.get('server') or {}).get('phone_base_url','')}))\""
+    )
+    raw = (out.read() + err.read()).decode("utf-8", "replace").strip()
+    try:
+        return json.loads(raw.splitlines()[-1])
+    except Exception:
+        print("  !! 读服务器配置失败，原始输出：%s" % raw[:200])
+        return {"dl": "", "url": ""}
 
 # 架构关键字 -> 远端文件名
 TARGETS = [
@@ -84,10 +123,25 @@ def main():
         print("请先设置环境变量 SMSF_PASS")
         sys.exit(1)
 
+    host = resolve_host()
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    cli.connect(HOST, username=USER, password=pw, timeout=30)
+    cli.connect(host, username=USER, password=pw, timeout=30)
     sftp = cli.open_sftp()
+
+    rc = remote_config(cli)
+    dl_dir = (rc.get("dl") or "").strip()
+    if not dl_dir:
+        print("!! 服务器 config.yaml 里没配 panel.apk_download_dir，无法上传。")
+        print("   在服务器上跑一次 deploy/install.sh，或手工把这一项填上。")
+        sys.exit(1)
+    url = (rc.get("url") or "").strip()
+    m = re.match(r"^[a-zA-Z]+://([^/]+)", url)
+    dl_host = m.group(1) if m else ""
+    print("  服务器      : %s" % host)
+    print("  下载目录    : %s" % dl_dir)
+    print("  下载域名    : %s%s" % (dl_host or "(未配置上报域名)", ""))
+    print()
 
     hashes = {}
     failed = []
@@ -101,8 +155,8 @@ def main():
             continue
         size = src.stat().st_size
         print("  %-24s -> %s  (%.1f MB)" % (src.name, remote_name, size / 1024 / 1024))
-        sftp.put(str(src), DL_DIR + "/" + remote_name)
-        remote_size = sftp.stat(DL_DIR + "/" + remote_name).st_size
+        sftp.put(str(src), dl_dir + "/" + remote_name)
+        remote_size = sftp.stat(dl_dir + "/" + remote_name).st_size
         if remote_size != size:
             print("     !! 远端大小不符：%d != %d" % (remote_size, size))
             failed.append(key)
@@ -114,11 +168,14 @@ def main():
         _, out, err = cli.exec_command(cmd)
         return (out.read() + err.read()).decode("utf-8", "replace")
 
-    for path in ("/apk1", "/apk2", "/apk3"):
-        r = run("curl -s -o /dev/null -w '%%{http_code} %%{size_download}' "
-                "--max-time 20 --resolve notic.mulinsen.win:443:127.0.0.1 "
-                "-r 0-65535 https://notic.mulinsen.win" + path)
-        print("  %-6s -> %s" % (path, r.strip()))
+    if not dl_host:
+        print("  （未配置上报域名，跳过下载地址校验 —— 在面板【参数设置】里填 server.phone_base_url）")
+    else:
+        for path in ("/apk1", "/apk2", "/apk3"):
+            r = run("curl -s -o /dev/null -w '%%{http_code} %%{size_download}' "
+                    "--max-time 20 --resolve %s:443:127.0.0.1 "
+                    "-r 0-65535 https://%s%s" % (dl_host, dl_host, path))
+            print("  %-6s -> %s" % (path, r.strip()))
 
     print()
     print("== 下载闸门 ==")

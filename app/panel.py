@@ -6,6 +6,7 @@ import hmac
 import json
 import hashlib
 import logging
+import re
 import secrets
 import time
 import zipfile
@@ -363,7 +364,15 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
     @router.get("/panel/overview", response_class=HTMLResponse)
     async def overview(request: Request, reveal: str = Query("")):
         guard(request)
-        return templates.TemplateResponse("overview.html", ctx(request, active="overview", reveal=reveal in ("1", "true", "yes")))
+        # 面板上要显示「去哪下载 APK」，这个地址从配置里取，不写死。
+        # phone_base_url 形如 https://你的域名/smsf/hook，这里只要主机名部分。
+        _base = (cfg.get("server.phone_base_url") or "").strip()
+        dl_host = ""
+        if _base:
+            _m = re.match(r"^[a-zA-Z]+://([^/]+)", _base)
+            dl_host = _m.group(1) if _m else _base
+        return templates.TemplateResponse("overview.html", ctx(
+            request, active="overview", reveal=reveal in ("1", "true", "yes"), dl_host=dl_host))
 
     # ---------------- 消息流 ----------------
 
@@ -787,7 +796,11 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             "ts": timestamp,
             "sign": urllib.parse.quote(sign, safe=""),
         }
-        base = cfg.get("server.phone_base_url", "https://notic.mulinsen.win/smsf/hook")
+        # 上报域名由安装时填写（见 config.yaml 的 server.phone_base_url）。
+        # 没填就给个一眼能看懂的提示，而不是偷偷用一个写死的域名。
+        base = (cfg.get("server.phone_base_url") or "").rstrip("/")
+        if not base:
+            base = "https://请先在【参数设置】里填写上报域名"
         urls = {
             "短信": base + "/sms",
             "来电": base + "/call",
