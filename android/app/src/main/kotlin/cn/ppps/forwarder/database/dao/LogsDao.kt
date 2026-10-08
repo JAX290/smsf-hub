@@ -112,6 +112,21 @@ interface LogsDao {
     @Query("DELETE FROM Logs WHERE forward_status = 0 AND (retry_count >= :maxRetry OR time < :before)")
     fun purgePendingRetry(maxRetry: Int, before: Long): Int
 
+    // ===== 【v61】数据精简 =====
+    // 只裁「已经成功发出」（forward_status = 2）的记录：
+    //   · 待发(0) 和卡住(1) 的绝不能删 —— 那些还要重试，删了就真丢了
+    //   · 手机端是短期缓冲，永久档案在服务端
+    @Query("DELETE FROM Logs WHERE forward_status = 2 AND time < :before")
+    fun deleteSentBefore(before: Long): Int
+
+    @Query("SELECT COUNT(*) FROM Logs WHERE forward_status = 2")
+    fun countSent(): Int
+
+    /** 条数兜底：按 id 从小到大（最旧）裁掉多余的已成功记录 */
+    @Query("DELETE FROM Logs WHERE forward_status = 2 AND id IN (" +
+            "SELECT id FROM Logs WHERE forward_status = 2 ORDER BY id ASC LIMIT :excess)")
+    fun trimSentOldest(excess: Int): Int
+
     @Transaction
     @Query("SELECT * FROM Logs WHERE type = :type ORDER BY id DESC")
     fun pagingSource(type: String): PagingSource<Int, LogsAndRuleAndSender>

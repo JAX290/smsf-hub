@@ -11,6 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import cn.ppps.forwarder.core.Core
+import cn.ppps.forwarder.database.AppDatabase
 import cn.ppps.forwarder.utils.Log
 import cn.ppps.forwarder.utils.SendUtils
 import cn.ppps.forwarder.utils.SettingUtils
@@ -126,6 +127,11 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            // 【v61】数据精简：先把够旧的「已成功发出」记录裁掉。
+            // 放在开关判断之前 —— 就算离线队列被关掉，本地也不该无限膨胀。
+            val trimmed = trimLocalHistory()
+            if (trimmed > 0) Log.d(TAG, "本地历史已精简 $trimmed 条")
+
             if (!SettingUtils.enableOfflineQueue) {
                 Log.d(TAG, "离线队列未启用，跳过")
                 return@withContext Result.success()
@@ -179,6 +185,58 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
         } catch (e: Exception) {
             Log.e(TAG, "doWork error: ${e.message}", e)
             Result.retry()
+        }
+    }
+
+    /**
+     * 【v61 数据精简】手机端只留一个短期缓冲。
+     *
+     * 定位：手机是「中转站」，永久档案在服务端（归档永不删）。所以这里可以放心裁 ——
+     *   · 只删 forward_status = 2（已成功发出）的转发记录
+     *   · Msg 只删「已经没有任何转发记录」的（待发/卡住的都被 Logs 引用着，一律不动）
+     *   · 再按条数上限兜底
+     *
+     * 为什么要做：实测某台手机 8 天攒到 75.7MB，其中 Logs 表独占 68MB
+     *（因为每条消息的正文被当成 HTTP 请求体又存了一份明文）。
+     * 手机留着这些既没用又占地方，还多一份隐私暴露面。
+     */
+    private fun trimLocalHistory(): Int {
+        return try {
+            val keepMs = SettingUtils.localKeepDays.coerceIn(1, 30) * 24L * 3600_000L
+            val cutoff = System.currentTimeMillis() - keepMs
+
+            var n = Core.logs.deleteSentBefore(cutoff)
+            n += Core.msg.deleteOrphansBefore(cutoff)
+
+            // 条数兜底：防止某天消息特别多把库撑大
+            val maxRows = SettingUtils.localMaxRows.coerceIn(200, 20000)
+            val sent = Core.logs.countSent()
+            if (sent > maxRows) n += Core.logs.trimSentOldest(sent - maxRows)
+
+            val maxMsgs = SettingUtils.localMaxMsgs.coerceIn(200, 20000)
+            val msgs = Core.msg.countAll()
+            if (msgs > maxMsgs) n += Core.msg.trimOrphansOldest(msgs - maxMsgs)
+
+            // SQLite 删行不会让文件变小，删得多时 VACUUM 一次把空间真正还回去
+            if (n > 300) vacuumIfDue()
+            n
+        } catch (e: Exception) {
+            Log.e(TAG, "清理本地历史失败: ${e.message}")
+            0
+        }
+    }
+
+    /** VACUUM 会重写整个数据库，比较贵 —— 一天最多做一次 */
+    private fun vacuumIfDue() {
+        val now = System.currentTimeMillis()
+        if (now - SettingUtils.localLastVacuum < 24L * 3600_000L) return
+        try {
+            AppDatabase.getInstance(applicationContext).openHelper.writableDatabase.execSQL("VACUUM")
+            SettingUtils.localLastVacuum = now
+            Log.i(TAG, "VACUUM 完成，数据库空间已回收")
+        } catch (e: Exception) {
+            // 拿不到独占锁等情况会失败，下次再来，绝不能因此让整个清理失败
+            Log.e(TAG, "VACUUM 失败（忽略）: ${e.message}")
         }
     }
 }

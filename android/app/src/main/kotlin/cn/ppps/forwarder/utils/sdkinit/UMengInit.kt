@@ -21,16 +21,24 @@ class UMengInit private constructor() {
         private const val DEFAULT_CHANNEL_ID = "github"
         /**
          * 初始化SDK,合规指南【先进行预初始化，如果用户隐私同意后可以初始化UmengSDK进行信息上报】
-         */
-        /**
-         * 初始化SDK,合规指南【先进行预初始化，如果用户隐私同意后可以初始化UmengSDK进行信息上报】
+         *
+         * 【v62 数据精简 / 隐私】这里**永远不初始化**。
+         *
+         * 为什么不删掉这个类：调用点（各种 BaseFragment 等）还在，删了要动很多文件；
+         * 让它变成一个空实现，效果一样而且风险最小。
+         *
+         * 为什么要禁：
+         *   这是个要「隐蔽」的 App，而友盟统计会把设备信息/页面埋点上报到第三方服务器，
+         *   既多一份隐私暴露面，又是一条可被识别的外部流量特征。
+         *   实测装了厂商原始 **release** 包的那台手机，files/ 里留下了
+         *   `.umeng/`、`um_ncc_local_config`、`umeng_it.cache`、`files/exid.dat` 等一串它的文件。
+         *   （我们编的 debug 包因为下面原来那句 isDebug 判断本来就不会初始化，
+         *     但 release 包会 —— 所以要在代码层彻底关掉。）
          */
         @JvmOverloads
         fun init(context: Context = XUI.getContext()) {
-            val appContext = context.applicationContext
-            if (appContext is Application) {
-                initApplication(appContext)
-            }
+            // 故意什么都不做（见上面的说明），别"顺手"把它恢复回去。
+            return
         }
 
         /**

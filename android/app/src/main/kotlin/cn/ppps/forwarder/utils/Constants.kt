@@ -76,6 +76,14 @@ const val SP_MUSIC_INTERVAL = "music_interval"
 // 它们对用户没有任何信息量；其余通知照发，由服务端分级。
 const val SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE = "enable_skip_system_status_noise"
 
+// ===== 数据精简（v61）=====
+// 手机只是「中转站」，永久档案在服务端（归档永不删）。所以手机端只留一个短期缓冲，
+// 到点就裁掉，既省空间也少一份隐私暴露面（数据库里原本存着每条消息的正文）。
+const val SP_LOCAL_KEEP_DAYS = "local_keep_days"
+const val SP_LOCAL_MAX_ROWS = "local_max_rows"
+const val SP_LOCAL_MAX_MSGS = "local_max_msgs"
+const val SP_LOCAL_LAST_VACUUM = "local_last_vacuum"
+
 // ===== 攒批发送（v55）=====
 // 手机端把要攒的通知先存进 Digest 表，到点合并成**一个请求**发出去，省射频唤醒。
 // 窗口值由服务端通过心跳响应下发（面板上改完就生效），本地只存一份副本。

@@ -36,6 +36,23 @@ interface MsgDao {
     @Query("DELETE FROM Msg where time<:time")
     fun deleteTimeAgo(time: Long)
 
+    // ===== 【v61】数据精简 =====
+    // 手机端只是「中转缓冲」，永久档案在服务端。这里只删**已经没有任何转发记录**
+    // 且够旧的消息 —— 待发/卡住的消息都还被 Logs 引用着，绝不会被删掉。
+    // ⚠️ 子查询里必须排除 NULL/0 的 msg_id：SQL 里 `x NOT IN (…, NULL)` 永远不成立，
+    //    一条脏数据就会让整个清理静默失效。
+    @Query("SELECT COUNT(*) FROM Msg")
+    fun countAll(): Int
+
+    @Query("DELETE FROM Msg WHERE time < :before AND id NOT IN (" +
+            "SELECT DISTINCT msg_id FROM Logs WHERE msg_id IS NOT NULL AND msg_id != 0)")
+    fun deleteOrphansBefore(before: Long): Int
+
+    @Query("DELETE FROM Msg WHERE id IN (SELECT id FROM Msg WHERE id NOT IN (" +
+            "SELECT DISTINCT msg_id FROM Logs WHERE msg_id IS NOT NULL AND msg_id != 0)" +
+            " ORDER BY id ASC LIMIT :excess)")
+    fun trimOrphansOldest(excess: Int): Int
+
     @Update
     fun update(msg: Msg): Completable
 

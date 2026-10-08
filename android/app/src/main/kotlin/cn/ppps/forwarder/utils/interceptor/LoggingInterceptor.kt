@@ -27,8 +27,17 @@ class LoggingInterceptor(private val logId: Long) : HttpLoggingInterceptor("cust
 
     override fun log(message: String) {
         Log.d(TAG, message)
+        // 【v61 数据精简】不要把 HTTP 交互整段写进手机数据库。
+        //
+        // 原来的问题是：本拦截器把**每一行**交互都 updateLogs 进 Logs.forward_response，
+        // 而 level=PARAM 时连请求体一起记 —— 于是每条短信/通知的正文在手机里又存了一份明文。
+        // 实测某台手机因此 8 天涨到 75.7MB，其中 Logs 表独占 68MB（占数据库 90%）。
+        // 排障只需要「方法+URL / 响应码 / 错误信息」，正文没有留在手机上的理由
+        //（服务端本来就有一份永久归档）。
+        if (message.startsWith("\tbody:") || message.startsWith("body:")) return
+        val brief = if (message.length > 300) message.substring(0, 300) + "…" else message
         //状态=-1，不更新原状态
-        SendUtils.updateLogs(logId, -1, message)
+        SendUtils.updateLogs(logId, -1, brief)
     }
 
     /**

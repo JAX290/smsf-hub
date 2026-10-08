@@ -104,6 +104,18 @@ class SettingUtils private constructor() {
         // 默认开：这些通知对用户零信息量，白白占带宽和存储。
         var enableSkipSystemStatusNoise: Boolean by SharedPreference(SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE, true)
 
+        // ===== 【v61】数据精简 =====
+        // 定位：手机端只是「中转缓冲」，永久档案在服务端（归档永不删）。
+        // 所以这里只管**已经成功发出去**的记录，保留几天就裁掉；
+        // 待发/卡住的记录一律不动（那些还要重试，删了就真丢了）。
+        //
+        // 为什么要做：实测某台手机 8 天攒到 75.7MB，其中 Logs 表占 68MB ——
+        // 因为每条消息的正文都被当成「HTTP 请求体」又存了一份明文。
+        var localKeepDays: Int by SharedPreference(SP_LOCAL_KEEP_DAYS, 2)
+        var localMaxRows: Int by SharedPreference(SP_LOCAL_MAX_ROWS, 3000)
+        var localMaxMsgs: Int by SharedPreference(SP_LOCAL_MAX_MSGS, 3000)
+        var localLastVacuum: Long by SharedPreference(SP_LOCAL_LAST_VACUUM, 0L)
+
         // ===== 【v55】攒批发送 =====
         // 手机端不再「来一条发一条」，而是先攒进 Digest 表、到点合并成一个请求发出去。
         // 实测某台手机一天 715 条消息 = 715 次射频唤醒，攒批后约 120 次（降到 1/6）。

@@ -26,11 +26,16 @@ class UpdateLogsWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 return@withContext Result.failure()
             }
             if (sendResponse.status >= 0) {
-                val response = sendResponse.response + "\nAt " + DateUtils.getNowString(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()))
+                // 【v61 数据精简】存进手机数据库的响应文本截断，别把整段正文/长报文留下
+                val raw = sendResponse.response ?: ""
+                val brief = if (raw.length > 500) raw.substring(0, 500) + "…（已截断）" else raw
+                val response = brief + "\nAt " + DateUtils.getNowString(SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()))
                 Thread.sleep(100) //让status=-1的日志先更新
                 Core.logs.updateStatus(sendResponse.logId, sendResponse.status, response)
             } else {
-                Core.logs.updateResponse(sendResponse.logId, sendResponse.response)
+                val raw = sendResponse.response ?: ""
+                val brief = if (raw.length > 300) raw.substring(0, 300) + "…" else raw
+                Core.logs.updateResponse(sendResponse.logId, brief)
             }
 
             return@withContext Result.success()

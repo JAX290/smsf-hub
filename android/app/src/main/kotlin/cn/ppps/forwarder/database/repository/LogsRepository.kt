@@ -42,6 +42,17 @@ class LogsRepository(private val logsDao: LogsDao) {
     @WorkerThread
     fun purgePendingRetry(maxRetry: Int, before: Long): Int = logsDao.purgePendingRetry(maxRetry, before)
 
+    // ===== 【v61】数据精简（只裁已经成功发出的记录）=====
+
+    @WorkerThread
+    fun deleteSentBefore(before: Long): Int = logsDao.deleteSentBefore(before)
+
+    @WorkerThread
+    fun countSent(): Int = logsDao.countSent()
+
+    @WorkerThread
+    fun trimSentOldest(excess: Int): Int = logsDao.trimSentOldest(excess)
+
     fun getIdsByTimeAndStatus(hours: Int, statusList: List<Int>): List<Logs> {
         var sql = "SELECT * FROM Logs WHERE 1=1"
         if (hours > 0) {

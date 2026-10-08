@@ -17,4 +17,15 @@ class MsgRepository(private val msgDao: MsgDao) {
     @WorkerThread
     fun deleteTimeAgo(time: Long) = msgDao.deleteTimeAgo(time)
 
+    // ===== 【v61】数据精简（只删没有任何转发记录的旧消息）=====
+
+    @WorkerThread
+    fun countAll(): Int = msgDao.countAll()
+
+    @WorkerThread
+    fun deleteOrphansBefore(before: Long): Int = msgDao.deleteOrphansBefore(before)
+
+    @WorkerThread
+    fun trimOrphansOldest(excess: Int): Int = msgDao.trimOrphansOldest(excess)
+
 }
