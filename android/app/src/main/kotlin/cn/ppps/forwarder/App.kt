@@ -52,6 +52,7 @@ import cn.ppps.forwarder.utils.Preset
 import cn.ppps.forwarder.utils.ProximitySensorScreenHelper
 import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.SharedPreference
+import cn.ppps.forwarder.workers.HeartbeatWorker
 import cn.ppps.forwarder.workers.OfflineRetryWorker
 import cn.ppps.forwarder.utils.sdkinit.UMengInit
 import cn.ppps.forwarder.utils.sdkinit.XBasicLibInit
@@ -285,6 +286,13 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
                 OfflineRetryWorker.schedulePeriodic(this)
             }
 
+            //【新增】心跳：每 10 分钟跟服务器报一次状态（版本 / 权限 / 服务是否在跑）。
+            //服务器端在面板首页按手机显示成绿/黄/红，一眼能看出哪台失联了。
+            //⚠️ 只在主进程启动，避免 :cactusRemoteService 里又排一份。
+            if (isMainProcess()) {
+                HeartbeatWorker.schedule(this)
+            }
+
             //监听锁屏&解锁
             val lockScreenReceiver = LockScreenReceiver()
             val lockScreenFilter = IntentFilter().apply {
@@ -326,6 +334,15 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
                     hideNotification(false)
                     hideNotificationAfterO(false)
                     //无声音乐
+                    // 【2026-09-30 耗电排查结论】Cactus 的 builder 默认就是 musicEnabled=true，
+                    // 不调用 setter 时它会把这个默认值写回 cactus.xml ——
+                    // 实测：只把 cactus.xml 改成 false、重启后又被写回 true，
+                    // 所以关掉音乐【必须显式调用 setMusicEnabled(false)】，靠配置文件关不掉。
+                    //
+                    // 不关的代价（红米实测 18h17m 电池统计）：
+                    //   · AudioDirectOut 音频唤醒锁 17h14m56s / 5317 次（占统计时长 96%）
+                    //   · 手机进不了深度休眠（doze 只占 17.4%），整机待机耗电被拖高
+                    //   · App 估算耗电 83.5 mAh（cpu=81.8），全机第一，第二名应用才 15.1
                     if (SettingUtils.enablePlaySilenceMusic) {
                         setMusicEnabled(true)
                         setBackgroundMusicEnabled(true)
@@ -333,6 +350,9 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
                         //设置音乐间隔时间，时间间隔越长，越省电
                         setMusicInterval(SettingUtils.musicInterval.toLong())
                         isDebug(true)
+                    } else {
+                        setMusicEnabled(false)
+                        setBackgroundMusicEnabled(false)
                     }
                     //是否可以使用一像素，默认可以使用，只有在android p以下可以使用
                     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P && SettingUtils.enableOnePixelActivity) {

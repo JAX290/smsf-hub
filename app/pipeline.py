@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .archive import Archive
 from .channels import build_channels, dispatch
+from .classify import configure as configure_priority, classify as classify_tier
 from .dedup import Dedup
 from .devices import DeviceRegistry
 from .merge import Merger
@@ -90,22 +91,49 @@ def classify_notify(mtype: str, sender: str, content: str):
     return "notify", sender, ""
 
 
+def _tier_of(rec: dict) -> tuple[int, str]:
+    """给一条「落盘时还没有分级」的历史记录补算层级。"""
+    tmp = Incoming(
+        type=str(rec.get("type") or ""),
+        sender=str(rec.get("sender") or ""),
+        app=str(rec.get("app") or ""),
+        content=str(rec.get("content") or ""),
+        device=str(rec.get("device") or ""),
+        ts=0,
+    )
+    return classify_tier(tmp)
+
+
 def fix_record(rec: dict) -> dict:
-    """对历史记录做同样的纠正，供面板展示时使用（不改动磁盘上的原始数据）。"""
+    """对历史记录做同样的纠正，供面板展示时使用（不改动磁盘上的原始数据）。
+
+    做两件事：
+      1. 纠正手机端「通知被当成短信上报」的老格式（见 classify_notify）
+      2. 给 2026-10-07 之前落盘、没有 tier 字段的老记录补算分级
+    """
     mtype, sender, app = classify_notify(rec.get("type", ""), rec.get("sender", ""), rec.get("content", ""))
-    if mtype == rec.get("type") and sender == rec.get("sender") and not app:
+    changed = (mtype != rec.get("type")) or (sender != rec.get("sender")) or bool(app)
+    need_tier = rec.get("tier") in (None, "", -1, "-1")
+    if not changed and not need_tier:
         return rec
     out = dict(rec)
-    out["type"] = mtype
-    out["sender"] = sender
-    if app:
-        out["app"] = app
+    if changed:
+        out["type"] = mtype
+        out["sender"] = sender
+        if app:
+            out["app"] = app
+    if need_tier:
+        tier, reason = _tier_of(out)
+        out["tier"] = tier
+        out["tier_reason"] = reason
     return out
 
 
 class Pipeline:
     def __init__(self, cfg):
         self.cfg = cfg
+        # 消息分级规则（降噪核心）：从 config.yaml 的 priority: 段读
+        configure_priority(cfg)
         self.archive = Archive(
             root=cfg.archive_root(),
             subject_rules=cfg.get("archive.subject_rules", {}),
@@ -113,6 +141,7 @@ class Pipeline:
             total_max_mb=cfg.get("archive.total_max_mb", 512),
             warn_percent=cfg.get("archive.warn_percent", 80),
             content_max_chars=cfg.get("archive.content_max_chars", 4000),
+            warn_free_gb=cfg.get("archive.warn_free_gb", 2.0),
         )
         self.dedup = Dedup(
             enable=cfg.get("dedup.enable", True),
@@ -128,8 +157,11 @@ class Pipeline:
             separator=cfg.get("merge.separator", chr(92) + "n---" + chr(92) + "n"),
             flush_cb=self._dispatch,
         )
-        keep = int(cfg.get("panel.recent_keep", 500) or 500)
+        keep = int(cfg.get("panel.recent_keep", 8000) or 8000)
         self.recent = deque(maxlen=keep)
+        # 落盘文件保留多少条。比内存大得多：面板翻不够时可从这里继续读，
+        # 重启后也能把历史读回内存。默认 20 万条（约 60MB）。
+        self.recent_file_keep = int(cfg.get("panel.recent_file_keep", 200000) or 200000)
         rf = str(cfg.get("panel.recent_file", "./data/recent.jsonl"))
         self.recent_file = Path(rf) if os.path.isabs(rf) else (Path(cfg.path).parent / rf).resolve()
         self._recent_lock = threading.Lock()
@@ -180,8 +212,8 @@ class Pipeline:
             with self.recent_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + chr(10))
                 self._recent_lines += 1
-            # 文件太大就裁剪，只留最近 3 倍容量的条数
-            limit = self.recent.maxlen * 3 if self.recent.maxlen else 1500
+            # 文件太大就裁剪，只留最近 recent_file_keep 条
+            limit = self.recent_file_keep or 200000
             if self._recent_lines > limit:
                 all_lines = self.recent_file.read_text(encoding="utf-8").splitlines()
                 self.recent_file.write_text(chr(10).join(all_lines[-limit:]) + chr(10), encoding="utf-8")
@@ -227,6 +259,9 @@ class Pipeline:
         if _a:
             msg.app = _a
 
+        # 消息分级（降噪核心）：归档与面板都要用，所以在归档之前先算好
+        msg.tier, msg.tier_reason = classify_tier(msg)
+
         if self.dedup.seen(msg):
             self.stats["duplicates"] += 1
             log.info("重复消息已跳过: %s", msg.fingerprint()[:60])
@@ -250,6 +285,8 @@ class Pipeline:
             "content": (msg.content or "")[:2000],   # 面板要能展开看详情，留长一点
             "device": msg.device,
             "archived": bool(path),
+            "tier": msg.tier,
+            "tier_reason": msg.tier_reason,
         }
         self.recent.appendleft(record)
         self._append_recent(record)
@@ -285,6 +322,26 @@ class Pipeline:
         self.channels = build_channels(self.cfg)
         log.info("渠道已重新加载，当前启用 %d 个终端", len(self.channels))
         return len(self.channels)
+
+    def reload_priority(self) -> dict:
+        """面板改完分级规则后热加载（重新读配置文件，不用重启服务）。"""
+        p = None
+        try:
+            from .config import load_config
+            fresh = load_config(str(self.cfg.path))
+            p = configure_priority(fresh)
+        except Exception:
+            log.exception("重新读取配置失败，沿用内存里的分级规则")
+            p = configure_priority(self.cfg)
+        log.info("分级规则已重新加载：重要应用 %d 条 / 噪音应用 %d 条 / "
+                 "重要关键词 %d 条 / 噪音关键词 %d 条 / 推送门槛 T%d",
+                 len(p.important_apps), len(p.noise_apps),
+                 len(p.important_keywords), len(p.noise_keywords), p.min_push_tier)
+        return {
+            "important_apps": len(p.important_apps),
+            "noise_apps": len(p.noise_apps),
+            "min_push_tier": p.min_push_tier,
+        }
 
     async def shutdown(self) -> None:
         await self.merger.flush_all()

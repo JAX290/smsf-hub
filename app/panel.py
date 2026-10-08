@@ -22,7 +22,10 @@ from fastapi.templating import Jinja2Templates
 
 from .app_names import build_map, display_name
 from .channels import CHANNEL_CLASSES, CHANNEL_NAMES
-from . import channel_store
+from . import analysis, channel_store
+from .analysis import DEFAULT_WATCH_KEYWORDS
+from .classify import TIER_CSS, TIER_LABEL, extract as extract_info, rules as priority_rules
+from .models import Incoming, TYPE_DIR
 from .settings_schema import CHANNEL_EDITABLE, GROUP_LABELS, RULE_FIELDS, SCHEMA
 from .pipeline import fix_record
 from .verify import compute_sign
@@ -60,6 +63,62 @@ def _human(n: int) -> str:
             return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
         n /= 1024.0
     return f"{n:.1f} GB"
+
+
+# ---------------- 归档全文搜索（"看不到之前的消息"的根治办法） ----------------
+# 面板的「消息流」只是一内存窗口（默认 8000 条 / 约 2 天）；
+# 更早的历史全在归档 md 里。这里把归档逐文件解析成条目并缓存，
+# 支持关键词 / 设备 / 类型 / 日期范围，几万条也是秒级。
+_SEARCH_CACHE: dict[str, tuple] = {}
+_SEARCH_CACHE_MAX = 4000
+
+
+def _archive_entries(path: Path) -> list:
+    """把一个归档 md 解析成条目列表（带 mtime+size 缓存，文件没变就不重复解析）。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = str(path)
+    hit = _SEARCH_CACHE.get(key)
+    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2]
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    out = []
+    head = None
+    buf: list[str] = []
+
+    def flush():
+        if head is None:
+            return
+        body = "\n".join(buf).strip()
+        parts = head.split(None, 1)
+        out.append({
+            "time": parts[0] if parts else "",
+            "who": parts[1].strip() if len(parts) > 1 else "",
+            "head": head,
+            "body": body,
+            "text": (head + "\n" + body).lower(),
+        })
+
+    for line in text.splitlines():
+        if line.startswith("## "):
+            flush()
+            head = line[3:].strip()
+            buf = []
+        elif head is not None:
+            buf.append(line)
+    flush()
+
+    if len(_SEARCH_CACHE) > _SEARCH_CACHE_MAX:
+        _SEARCH_CACHE.clear()
+    _SEARCH_CACHE[key] = (st.st_mtime_ns, st.st_size, out)
+    return out
 
 
 def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
@@ -419,9 +478,30 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
         app: str = Query(""),
         sort: str = Query("time"),
         order: str = Query("desc"),
+        min_tier: int = Query(3, ge=0, le=4),
     ):
         guard(request)
         base_rows = [fix_record(r) for r in pipeline.recent]
+
+        # ---- 分级过滤（降噪）----
+        # 默认只看 T3（重要）及以上：真人消息、验证码、短信、来电。
+        # 系统组件自报状态（"正在后台运行"这类）属于 T0/T1，默认折叠，
+        # 但只影响显示，磁盘上的原始数据一个字都没动。
+        def _tier(r: dict) -> int:
+            try:
+                return int(r.get("tier", 2))
+            except (TypeError, ValueError):
+                return 2
+
+        tier_counts = {t: 0 for t in range(5)}
+        for r in base_rows:
+            t = _tier(r)
+            if t in tier_counts:
+                tier_counts[t] += 1
+
+        if min_tier > 0:
+            base_rows = [r for r in base_rows if _tier(r) >= min_tier]
+        hidden_low = sum(v for k, v in tier_counts.items() if k < max(min_tier, 1)) if min_tier > 0 else 0
 
         app_table = build_map(cfg.get("panel.app_names", {}) or {})
 
@@ -514,6 +594,19 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             apps.insert(0, {"key": app, "name": app + "（当前筛选下没有）", "variants": []})
         for r in page_rows:
             r["app_display"] = display_name(r.get("app"), app_table)
+            t = _tier(r)
+            r["tier"] = t
+            r["tier_label"] = TIER_LABEL.get(t, "")
+            r["tier_css"] = TIER_CSS.get(t, "t2")
+            r["tier_reason"] = r.get("tier_reason") or ""
+            # 结构化提取：把手机端模板里的冗余行（包名/UID/时间/设备ID）剥掉，
+            # 顺手把验证码、金额捞出来，面板上直接显示有用的那部分。
+            try:
+                r["ex"] = extract_info(Incoming(
+                    type=r.get("type", ""), sender=r.get("sender", ""), app=r.get("app", ""),
+                    content=r.get("content", ""), device=r.get("device", "")))
+            except Exception:
+                r["ex"] = {"summary": r.get("content", ""), "code": "", "amounts": [], "links": [], "title": "", "body": ""}
 
         # 表头排序链接：保留当前筛选条件，点一次切换升降序
         sort_links = {}
@@ -528,7 +621,127 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
             total=total, device=device, mtype=mtype, sort=sort, order=order,
             devices=devices, apps=apps, app=app, mtypes=mtypes,
             sort_fields=_MSG_SORT_FIELDS, sort_links=sort_links,
+            min_tier=min_tier, tier_counts=tier_counts, hidden_low=hidden_low,
+            tier_label=TIER_LABEL, recent_keep=len(pipeline.recent),
             filtered=len(rows) != len(pipeline.recent)))
+
+    # ---------------- 归档全文搜索 ----------------
+
+    @router.get("/panel/search", response_class=HTMLResponse)
+    async def archive_search(
+        request: Request,
+        q: str = Query(""),
+        device: str = Query(""),
+        mtype: str = Query(""),
+        day_from: str = Query(""),
+        day_to: str = Query(""),
+        limit: int = Query(300, ge=10, le=2000),
+    ):
+        """在归档 Markdown 里全文搜索。
+
+        消息流只有最近几千条（内存窗口），这里能搜到**全部历史**，
+        这就是「看不到之前的消息」的根治办法。
+        """
+        guard(request)
+        root = pipeline.archive.root
+        ql = (q or "").strip().lower()
+
+        hits: list = []
+        scanned = 0
+        truncated = False
+        try:
+            files = sorted(root.rglob("*.md"))
+        except OSError:
+            files = []
+
+        for path in files:
+            rel = path.relative_to(root)
+            parts = rel.parts
+            if len(parts) >= 3:
+                dev, tname, subject = parts[0], parts[1], parts[2]
+            elif len(parts) == 2:
+                dev, tname, subject = "", parts[0], parts[1]
+            else:
+                dev, tname, subject = "", parts[0] if parts else "", ""
+
+            if device and dev != device:
+                continue
+            if mtype and tname != mtype:
+                continue
+            day = path.stem.split(".")[0]
+            if day_from and day < day_from:
+                continue
+            if day_to and day > day_to:
+                continue
+
+            for e in _archive_entries(path):
+                scanned += 1
+                if ql and ql not in e["text"]:
+                    continue
+                hits.append({
+                    "day": day, "time": e["time"], "who": e["who"],
+                    "device": dev, "type": tname, "subject": subject,
+                    "body": e["body"], "text": e["text"],
+                })
+
+        hits.sort(key=lambda x: (x["day"], x["time"]), reverse=True)
+        total_hits = len(hits)
+        if total_hits > limit:
+            hits = hits[:limit]
+            truncated = True
+
+        # 下拉候选：归档里实际出现过的设备与类型
+        devs, types = set(), set()
+        for path in files:
+            parts = path.relative_to(root).parts
+            if len(parts) >= 3:
+                devs.add(parts[0])
+                types.add(parts[1])
+            elif len(parts) == 2:
+                types.add(parts[0])
+
+        return templates.TemplateResponse("search.html", ctx(
+            request, active="search", rows=hits, q=q, device=device, mtype=mtype,
+            day_from=day_from, day_to=day_to, limit=limit,
+            total_hits=total_hits, truncated=truncated, scanned=scanned,
+            files=len(files), devices=sorted(devs), mtypes=sorted(types),
+            ptype=dict(TYPE_DIR)))
+
+    # ---------------- 分析 / 监控 ----------------
+
+    @router.get("/panel/analysis", response_class=HTMLResponse)
+    async def analysis_page(
+        request: Request,
+        day: str = Query(""),
+        days: int = Query(7, ge=1, le=30),
+    ):
+        """每日摘要 + 关键词监控 + 异常检测。全部只读，不改任何数据。"""
+        guard(request)
+        rows = [fix_record(r) for r in pipeline.recent]
+
+        kw_raw = str(cfg.get("analysis.watch_keywords", "") or "")
+        kws = [p.strip() for p in kw_raw.replace("，", ",").replace("；", ",").split(",") if p.strip()]
+        if not kws:
+            kws = list(DEFAULT_WATCH_KEYWORDS)
+
+        def _num(key, default):
+            try:
+                return float(cfg.get(key, default))
+            except (TypeError, ValueError):
+                return float(default)
+
+        summary = analysis.daily_summary(rows, day)
+        tr = analysis.trend(rows, days)
+        hits = analysis.watch_hits(rows, kws, limit=200)
+        anom = analysis.anomalies(
+            rows, days=days, device_status=_device_status_list(),
+            spike_factor=_num("analysis.spike_factor", 3.0),
+            spike_min=int(_num("analysis.spike_min_count", 15)),
+            code_burst=int(_num("analysis.code_burst", 6)),
+        )
+        return templates.TemplateResponse("analysis.html", ctx(
+            request, active="analysis", summary=summary, trend=tr, hits=hits,
+            anomalies=anom, keywords=kws, days=days, recent_keep=len(rows)))
 
     # ---------------- 手机管理 ----------------
 
@@ -713,6 +926,12 @@ def build_panel_router(cfg, pipeline, pairing=None) -> APIRouter:
                 changes[item["path"]] = str(raw)
         done = update_many(config_path, changes)
         log.info("面板修改了参数: %s", ", ".join(done) or "(无变化)")
+        # 分级规则改动后立刻热加载，不用重启服务
+        if any(str(k).startswith("priority.") for k in done):
+            try:
+                pipeline.reload_priority()
+            except Exception:
+                log.exception("重新加载分级规则失败")
         return templates.TemplateResponse("saved.html", ctx(
             request, active="settings", changed=done,
             note="部分参数（如合并窗口）需要重启服务才生效：sudo systemctl restart smsf-hub"))

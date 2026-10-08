@@ -71,6 +71,14 @@ const val SP_ENABLE_PLAY_SILENCE_MUSIC = "enable_play_silence_music"
 const val SP_ENABLE_ONE_PIXEL_ACTIVITY = "enable_one_pixel_activity"
 const val SP_MUSIC_INTERVAL = "music_interval"
 
+// ===== 通知噪音降级（v53）=====
+// 手机端直接跳过「系统应用发的纯状态通知」（正在播放/VPN 已连接/系统正在优化 这类），
+// 它们对用户没有任何信息量；其余通知照发，由服务端分级。
+const val SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE = "enable_skip_system_status_noise"
+
+// ===== 权限就绪锁定 =====
+const val SP_PERMISSION_READY_REPORTED = "permission_ready_reported"
+
 // ===== 离线待发队列 =====
 const val SP_ENABLE_OFFLINE_QUEUE = "enable_offline_queue"
 const val SP_OFFLINE_QUEUE_BATCH_SIZE = "offline_queue_batch_size"

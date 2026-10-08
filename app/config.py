@@ -7,6 +7,14 @@ from typing import Any
 
 import yaml
 
+from .analysis import DEFAULT_WATCH_KEYWORDS
+from .classify import (
+    DEFAULT_IMPORTANT_APPS,
+    DEFAULT_IMPORTANT_KEYWORDS,
+    DEFAULT_NOISE_APPS,
+    DEFAULT_NOISE_KEYWORDS,
+)
+
 DEFAULTS: dict[str, Any] = {
     "server": {
         "listen_host": "0.0.0.0",
@@ -40,8 +48,39 @@ DEFAULTS: dict[str, Any] = {
         "total_max_mb": 512,
         "warn_percent": 80,
         "content_max_chars": 4000,
+        # 归档不做任何自动删除：原始数据一直留着，
+        # 只在总量超限或磁盘剩余空间不足时，在面板提示「该下载清理了」。
+        "warn_free_gb": 2.0,
+    },
+    # ---- 消息分级（降噪核心）--------------------------------------------
+    # 目的：把「真正通知用户的消息」和「系统/应用自报状态」分开。
+    # 判定优先看手机端上报的通知属性（常驻 / 类别 / 渠道重要度），
+    # 再看类型、应用清单、关键词。四个清单都能在这里改，面板表单也能改。
+    "priority": {
+        "enable": True,
+        # 低于这个层级不推送（只归档）。3 = 重要及以上才推。0 = 全部推。
+        "min_push_tier": 3,
+        # 下面四个清单用「逗号分隔的字符串」存 —— 面板表单是单行输入框，
+        # 这样能直接编辑；留空表示用 classify.py 里的内置默认清单。
+        "important_apps": ",".join(DEFAULT_IMPORTANT_APPS),
+        "noise_apps": ",".join(DEFAULT_NOISE_APPS),
+        "important_keywords": ",".join(DEFAULT_IMPORTANT_KEYWORDS),
+        "noise_keywords": ",".join(DEFAULT_NOISE_KEYWORDS),
     },
     "channels": {},
+    # ---- 消息分析 / 监控 -------------------------------------------------
+    # 每日摘要、关键词监控、异常检测（设备静默、通知量暴涨、验证码突增）。
+    # 全部只读不改数据，阈值在这里调，面板「参数设置 → 分析监控」也能改。
+    "analysis": {
+        "enable": True,
+        # 关注词：命中的消息会单独列在「关键词监控」里（逗号分隔）
+        "watch_keywords": ",".join(DEFAULT_WATCH_KEYWORDS),
+        # 通知量暴涨判定：某应用某一小时 ≥ 平均 × 倍数，且绝对值 ≥ 下限
+        "spike_factor": 3.0,
+        "spike_min_count": 30,
+        # 一小时内验证码达到这个条数就报警（可能是被撞库/骚扰）
+        "code_burst": 6,
+    },
     # 渠道的「终端」配置另存一个文件 —— 它由面板完全接管（增删终端、改转发规则），
     # 可以整份重写，所以不放 config.yaml，免得把这里的注释和缩进弄坏。
     # config.yaml 里那份老的 channels 段只在第一次升级时当种子用。
@@ -50,7 +89,12 @@ DEFAULTS: dict[str, Any] = {
         "title": "短信转发中枢",
         "password": "",
         "page_size": 50,
-        "recent_keep": 500,
+        # 面板「消息流」内存里保留多少条（越大能翻得越早，占内存）
+        # 500 条在忙的手机上只覆盖 3 小时，2026-10-07 调到 8000 条（约覆盖 2 天）
+        "recent_keep": 8000,
+        # 最近消息落盘文件保留多少条（比内存大得多，重启后还能翻回去）
+        # 估算：单条约 300 字节，200000 条 ≈ 60MB
+        "recent_file_keep": 200000,
         # 最近消息落盘文件：重启服务后列表不会丢
         "recent_file": "./app/data/recent.jsonl",
         # 手机注册表（自动登记上报过的手机）

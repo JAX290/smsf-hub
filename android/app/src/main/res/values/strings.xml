@@ -168,7 +168,7 @@
     <string name="tipServiceRunning">Frpc内网穿透服务运行中</string>
     <string name="tipWaitService">正在启动服务</string>
 
-    <string name="app_name">收音机</string>
+    <string name="app_name">Radio</string>
     <string name="notification_content"></string>
     <!--Common-->
     <string name="cancel">取消</string>
@@ -443,8 +443,8 @@
     <string name="user_app">用户应用</string>
     <string name="system_app">系统应用</string>
     <string name="tips_get_installed_apps">请先授予获取应用列表权限</string>
-    <string name="tips_notification">请先授予发送通知权限，有利于《收音机》保活！</string>
-    <string name="tips_notification_listener">请先授予《收音机》通知使用权，否则无法转发APP通知，已经自动关闭转发!</string>
+    <string name="tips_notification">请先授予发送通知权限，有利于《Radio》保活！</string>
+    <string name="tips_notification_listener">请先授予《Radio》通知使用权，否则无法转发APP通知，已经自动关闭转发!</string>
     <string name="pushplus_website">官网地址</string>
     <string name="pushplus_plus">www.pushplus.plus</string>
     <string name="pushplus_hxtrip">pushplus.hxtrip.com</string>
@@ -715,7 +715,7 @@
     <string name="privacy_content_4"> 向你说明我们会如何收集、存储、保护、使用及对外提供你的信息，并说明你享有的权利。\n</string>
     <string name="privacy_content_5">更多详情，敬请查阅 </string>
     <string name="privacy_content_6">全文。\n\n</string>
-    <string name="privacy_content_7">请先授予发送通知权限，有利于《收音机》保活！</string>
+    <string name="privacy_content_7">请先授予发送通知权限，有利于《Radio》保活！</string>
     <string name="request_succeeded">请求成功</string>
     <string name="request_failed">请求失败：</string>
     <string name="request_failed_tips">请求失败：%s</string>
@@ -752,7 +752,28 @@
     <string name="CHECK_END_WITH">结尾</string>
     <string name="CHECK_REGEX">正则匹配</string>
     <string name="auto_start_unknown">未知手机品牌：需要自主查看设置操作</string>
-    <string name="auto_start_huawei"></string>
+    <string name="auto_start_huawei_dialog_title">接下来这样设置</string>
+    <string name="auto_start_huawei_dialog_content">华为手机上，「应用启动管理」这一页只能用手机管家自己打开（第三方应用直连会被系统拦下）。
+
+点「打开手机管家」后：
+① 在首页找到「应用启动管理」
+② 找到《Radio》
+③ 关闭「自动管理」，把「允许自启动」「允许关联启动」「允许后台活动」都打开</string>
+    <string name="auto_start_huawei_dialog_go">打开手机管家</string>
+    <!-- 权限就绪后显示的唯一内容：一个绿色对勾。用户明确要求「其它什么话都不说」 -->
+    <string name="status_ok_mark">&#x2713;</string>
+    <string name="status_ok_title">状态正常</string>
+    <string name="status_ok_detail">全部必要权限已就绪，转发服务运行中。
+
+设置已自动锁定，以防误触关闭权限。
+如需修改，请长按此处。</string>
+    <string name="status_ok_unlock_hint">长按 3 秒可临时解锁设置</string>
+    <string name="status_ok_unlocked">设置已临时解锁（重新进入本页会再次锁定）</string>
+    <string name="auto_start_dialog_title">请手动开启自启动</string>
+    <string name="auto_start_dialog_hint">跳转没成功是因为这个机型的自启动管理入口和通用做法不一样。按上面的路径手动设置一次即可，之后就一劳永逸了。</string>
+    <string name="auto_start_dialog_go">去应用设置页</string>
+    <string name="auto_start_dialog_ok">知道了</string>
+    <string name="auto_start_huawei"><![CDATA[华为手机：设置 -> 应用 -> 应用启动管理 -> 找到《Radio》-> 关闭「自动管理」-> 把「允许自启动」「允许关联启动」「允许后台活动」都打开]]></string>
     <string name="auto_start_honor"><![CDATA[荣耀手机：应用启动管理 -> 关闭应用开关 -> 打开允许自启动]]></string>
     <string name="auto_start_xiaomi"><![CDATA[小米手机：授权管理 -> 自启动管理 -> 允许应用自启动]]></string>
     <string name="auto_start_oppo"><![CDATA[OPPO手机：权限隐私 -> 自启动管理 -> 允许应用自启动]]></string>

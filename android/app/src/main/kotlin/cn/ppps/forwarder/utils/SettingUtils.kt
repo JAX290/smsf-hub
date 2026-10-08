@@ -90,10 +90,19 @@ class SettingUtils private constructor() {
         var enableCactus: Boolean by SharedPreference(SP_ENABLE_CACTUS, true)
 
         //是否播放静音音乐
-        var enablePlaySilenceMusic: Boolean by SharedPreference(SP_ENABLE_PLAY_SILENCE_MUSIC, true)
+        // 【2026-09-30 改为 false】无声音乐保活代价过大，默认关闭（详见 Preset.kt 里的实测数据）。
+        // 注意：Cactus 库的 builder 默认值是 true，所以 App.kt 里关闭时必须显式 setMusicEnabled(false)。
+        var enablePlaySilenceMusic: Boolean by SharedPreference(SP_ENABLE_PLAY_SILENCE_MUSIC, false)
 
         //是否启用1像素
         var enableOnePixelActivity: Boolean by SharedPreference(SP_ENABLE_ONE_PIXEL_ACTIVITY, false)
+
+        // 【v53 新增】是否跳过「系统应用发的纯状态通知」
+        //（正在播放 / VPN 已连接 / 系统正在优化 / USB 调试已连接 这类）
+        // 判据是通知自身的属性：常驻 + 通知类别属于 service/progress/transport/sysinfo，
+        // 且发送方是系统应用（uid < 10000）。第三方 App 的状态通知照旧上报。
+        // 默认开：这些通知对用户零信息量，白白占带宽和存储。
+        var enableSkipSystemStatusNoise: Boolean by SharedPreference(SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE, true)
 
         //无声音乐唤醒间隔（秒，越大越省电）
         var musicInterval: Int by SharedPreference(SP_MUSIC_INTERVAL, 10)
@@ -179,6 +188,10 @@ class SettingUtils private constructor() {
     var lastLocationReportTime: Long by SharedPreference(SP_LAST_LOCATION_REPORT_TIME, 0L)
     var lastLocationReportLat: Double by SharedPreference(SP_LAST_LOCATION_REPORT_LAT, 0.0)
     var lastLocationReportLng: Double by SharedPreference(SP_LAST_LOCATION_REPORT_LNG, 0.0)
+
+    // ===== 【新增】权限就绪锁定 =====
+    // 「全部必要权限已就绪」这件事只往服务器报一次，之后不再重复打扰。
+    var permissionReadyReported: Boolean by SharedPreference(SP_PERMISSION_READY_REPORTED, false)
 
     // ===== 【新增】离线待发队列 =====
     // 转发失败（网络不通、或换服务器后 secret 没对上被 401 拒）时不再当场放弃，

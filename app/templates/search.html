@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>归档搜索（全部历史，不受消息流窗口限制）</h2>
+  <form method="get" action="/panel/search" class="row">
+    <input type="text" name="q" value="{{ q }}" placeholder="关键词，例如 验证码 / 快递 / 张三" style="max-width:260px">
+    <select name="device" style="max-width:170px">
+      <option value="">全部终端</option>
+      {% for d in devices %}<option value="{{ d }}" {% if d == device %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+    <select name="mtype" style="max-width:130px">
+      <option value="">全部类型</option>
+      {% for t in mtypes %}<option value="{{ t }}" {% if t == mtype %}selected{% endif %}>{{ t }}</option>{% endfor %}
+    </select>
+    <input type="date" name="day_from" value="{{ day_from }}" style="max-width:150px" title="起始日期">
+    <input type="date" name="day_to" value="{{ day_to }}" style="max-width:150px" title="结束日期">
+    <select name="limit" style="max-width:120px">
+      {% for n in [100, 300, 1000, 2000] %}<option value="{{ n }}" {% if n == limit %}selected{% endif %}>最多 {{ n }} 条</option>{% endfor %}
+    </select>
+    <button type="submit">搜索</button>
+    {% if q or device or mtype or day_from or day_to %}<a class="ghost" href="/panel/search" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除</a>{% endif %}
+  </form>
+  <div class="hint">
+    扫描了 <b>{{ files }}</b> 个归档文件、<b>{{ scanned }}</b> 条记录，命中 <b>{{ total_hits }}</b> 条{% if truncated %}（只显示最新的 {{ limit }} 条，可用日期范围收窄）{% endif %}。
+    {% if q %}关键词：<b>{{ q }}</b>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      <th style="white-space:nowrap">时间</th>
+      <th style="white-space:nowrap">终端</th>
+      <th style="white-space:nowrap">类型</th>
+      <th>主题</th>
+      <th>内容</th>
+    </tr>
+    {% for r in rows %}
+    <tr>
+      <td style="white-space:nowrap">{{ r.day }} {{ r.time }}</td>
+      <td style="white-space:nowrap">{{ r.device or '-' }}</td>
+      <td style="white-space:nowrap">{{ r.type or '-' }}</td>
+      <td>{{ r.subject or r.who or '-' }}</td>
+      <td style="max-width:520px">
+        <details>
+          <summary style="cursor:pointer">{{ (r.body or r.who or '(空)')[:80] }}{% if (r.body or '')|length > 80 %}…{% endif %}</summary>
+          <pre style="margin:8px 0 0;white-space:pre-wrap">{{ r.body or '(空)' }}</pre>
+        </details>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>没有匹配的归档记录。{% if q or device or mtype or day_from or day_to %}换个条件试试，或者 <a href="/panel/search">清除</a>。{% endif %}</p>
+  {% endif %}
+</div>
+{% endblock %}

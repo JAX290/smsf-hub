@@ -64,9 +64,21 @@ object Preset {
             SettingUtils.enableCactus = true
             // 下面两个会产生可见痕迹，保持关闭：
             //   enableOnePixelActivity —— 一像素窗口，可能出现在最近任务里
-            //   enablePlaySilenceMusic —— 无声音乐，部分手机会显示媒体通知
+            //   enablePlaySilenceMusic —— 无声音乐，代价极大，已永久关闭
             SettingUtils.enableOnePixelActivity = false
-            SettingUtils.enablePlaySilenceMusic = true
+            // 【2026-09-30 改为 false】无声音乐保活的真实代价（红米实测 18h17m）：
+            //   · Cactus 每 12 秒重放一次静音片段，AudioDirectOut 音频唤醒锁持有 17h14m56s
+            //     （占统计时长 96%，5317 次），手机进不了深度休眠（doze 仅 17.4%）
+            //   · App 估算耗电 83.5 mAh（cpu=81.8），全机第一，第二名应用才 15.1
+            //   · 而它的保活价值并未被证实：nova6 开着它照样被 EMUI PowerGenie 杀掉并失联 15 小时；
+            //     红米上系统本来就没杀过它（退出历史里只有「安装 APK」一种原因）
+            // 真正有效的保活是「通知使用权 + 前台服务 + 电池白名单」，都零耗电，保留。
+            SettingUtils.enablePlaySilenceMusic = false
+            // 【v53 新增】跳过「系统应用发的纯状态通知」
+            //（正在播放 / VPN 已连接 / 系统正在优化 / USB 调试已连接 这类）
+            // 判据是通知自身的属性（常驻 + 通知类别），不是猜包名，
+            // 见 NotificationService.isSystemStatusNoise。第三方 App 的状态通知照发。
+            SettingUtils.enableSkipSystemStatusNoise = true
             // 从最近任务列表里隐藏，减少被发现的可能
             SettingUtils.enableExcludeFromRecents = true
 

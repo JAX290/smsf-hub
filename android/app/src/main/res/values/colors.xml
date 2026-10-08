@@ -145,4 +145,6 @@
     <color name="tooltip_background_dark">#e6616161</color>
     <color name="tooltip_background_light">#e6ffffff</color>
     <color name="white">#ffffffff</color>
+    <!-- 权限就绪对勾的绿色 -->
+    <color name="status_ok_green">#22C55E</color>
 </resources>

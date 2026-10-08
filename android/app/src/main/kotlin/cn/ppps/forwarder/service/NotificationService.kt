@@ -2,6 +2,7 @@ package cn.ppps.forwarder.service
 
 import android.annotation.SuppressLint
 import android.app.Notification
+import android.app.NotificationManager
 import android.content.ComponentName
 import android.os.Build
 import android.service.notification.NotificationListenerService
@@ -113,7 +114,30 @@ class NotificationService : NotificationListenerService() {
                 return
             }
 
-            val msgInfo = MsgInfo("app", from, text, Date(), title, -1)
+            // 【v53 新增】噪音跳过：只针对「系统应用发的纯状态通知」。
+            //
+            // 判据是通知自己的属性（常驻 + 通知类别），不是猜包名 ——
+            // 「正在播放 / VPN 已连接 / 系统正在优化 / USB 调试已连接」这类
+            // 都是 ongoing + category=service|progress|transport|sysinfo，
+            // 对用户没有任何信息量，直接不发，省流量也省服务端存储。
+            //
+            // 刻意只跳过系统应用（uid < 10000）的：第三方 App 的状态通知
+            // （音乐播放器、下载器等）照旧上报，服务端会把它判成「噪音」
+            // 并在归档里只留一行摘要，历史仍然可查。
+            if (SettingUtils.enableSkipSystemStatusNoise && isSystemStatusNoise(sbn, notification)) {
+                Log.d(TAG, "跳过系统状态通知：" + sbn.packageName + " cat=" + notification.category)
+                return
+            }
+
+            // 【v53 新增】把通知自身的属性拼成一行附在正文末尾，交给服务端判级：
+            //     NAT|cat=msg|ong=0|imp=3|grp=0
+            // 为什么用这种行格式：WebhookUtils 会把正文套进用户配置的模板里，
+            // 结构化字段会被打散；行格式即使被前后包了别的内容也能正则捞出来
+            //（和心跳的 HBT| 是同一个思路）。
+            val natLine = buildNotifyAttr(sbn, notification)
+            val contentForSend = if (natLine.isEmpty()) text else text + "\n" + natLine
+
+            val msgInfo = MsgInfo("app", from, contentForSend, Date(), title, -1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 Log.d(TAG, "消息的UID====>" + sbn.uid)
                 msgInfo.uid = sbn.uid
@@ -147,9 +171,77 @@ class NotificationService : NotificationListenerService() {
 
     }
 
+    /**
+     * 把通知自身的属性拼成一行，供服务端判级用。
+     *
+     *     NAT|cat=msg|ong=0|imp=3|grp=0
+     *
+     * cat = Notification.category（Android 官方语义：msg/call/email/service/progress/transport…）
+     * ong = 是否常驻（正在播放、VPN 已连接、正在充电这类都是常驻）
+     * imp = 通知渠道重要度 0-5（0 = 渠道被用户关掉了）
+     * grp = 是否是群组摘要
+     *
+     * 有了这几项，服务端判「这条是不是真在通知用户」就非常准，
+     * 不用再去猜包名属于哪一类应用。
+     */
+    private fun buildNotifyAttr(sbn: StatusBarNotification, notification: Notification): String {
+        return try {
+            val sb = StringBuilder("NAT")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val cat = notification.category ?: ""
+                if (cat.isNotEmpty()) {
+                    sb.append("|cat=").append(cat)
+                }
+                sb.append("|ong=").append(if (sbn.isOngoing) 1 else 0)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val imp = channelImportance(notification.channelId)
+                if (imp >= 0) {
+                    sb.append("|imp=").append(imp)
+                }
+            }
+            val grp = (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+            sb.append("|grp=").append(if (grp) 1 else 0)
+            sb.toString()
+        } catch (e: Exception) {
+            Log.w(TAG, "生成通知属性行失败：" + e.message)
+            ""
+        }
+    }
+
+    /** 取通知渠道的重要度（0=关闭 1=低 2=默认 3=高 4=紧急），拿不到返回 -1。 */
+    private fun channelImportance(channelId: String?): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || channelId.isNullOrEmpty()) return -1
+        return try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.getNotificationChannel(channelId)?.importance ?: -1
+        } catch (e: Exception) {
+            -1
+        }
+    }
+
+    /**
+     * 是不是「系统应用发的纯状态通知」——这类直接不发。
+     *
+     * 只认通知自己的属性，不猜包名；而且只认系统应用（uid < 10000），
+     * 第三方 App 的状态通知仍然上报（服务端归档里留一行摘要）。
+     */
+    private fun isSystemStatusNoise(sbn: StatusBarNotification, notification: Notification): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false
+        if (!sbn.isOngoing) return false
+        val uid = try {
+            sbn.uid
+        } catch (e: Exception) {
+            return false
+        }
+        if (uid < 1000 || uid >= 10000) return false
+        val cat = (notification.category ?: "").lowercase()
+        return cat == "service" || cat == "progress" || cat == "transport" ||
+                cat == "sysinfo" || cat == "status" || cat == "system"
+    }
+
     //关键词黑名单匹配：一行一个关键词，支持正则表达式，命中通知标题或内容任意一项即返回 true
-    private fun isInBlacklist(title: String, text: String): Boolean {
-        val blacklist = SettingUtils.appNotifyBlacklist
+    private fun isInBlacklist(title: String, text: String): Boolean {        val blacklist = SettingUtils.appNotifyBlacklist
         if (TextUtils.isEmpty(blacklist)) return false
 
         for (line in blacklist.split("\n")) {

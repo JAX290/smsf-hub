@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block body %}
-{% set qs = 'q=' ~ (q|urlencode) ~ '&device=' ~ (device|urlencode) ~ '&mtype=' ~ (mtype|urlencode) ~ '&app=' ~ (app|urlencode) ~ '&sort=' ~ sort ~ '&order=' ~ order %}
+{% set qs = 'q=' ~ (q|urlencode) ~ '&device=' ~ (device|urlencode) ~ '&mtype=' ~ (mtype|urlencode) ~ '&app=' ~ (app|urlencode) ~ '&sort=' ~ sort ~ '&order=' ~ order ~ '&min_tier=' ~ min_tier %}
+<style>
+  .tier { display:inline-block; min-width:34px; text-align:center; padding:2px 7px; border-radius:10px;
+          font-size:12px; font-weight:600; white-space:nowrap; }
+  .t4 { background:#fee2e2; color:#b91c1c; }
+  .t3 { background:#dbeafe; color:#1d4ed8; }
+  .t2 { background:#e5e7eb; color:#4b5563; }
+  .t1 { background:#f3f4f6; color:#9ca3af; }
+  .t0 { background:#f9fafb; color:#c0c4cc; }
+  .code { display:inline-block; padding:1px 7px; border-radius:8px; background:#fef3c7; color:#92400e;
+          font-weight:700; font-family:ui-monospace,Consolas,monospace; }
+  .stat { color:var(--dim); font-size:13px; }
+  .stat b { color:var(--fg); }
+</style>
+
 <div class="card">
   <h2>消息流（共 {{ total }} 条{% if q or device or mtype or app %}，已筛选{% endif %}，第 {{ page }}/{{ pages }} 页）</h2>
   <form method="get" action="/panel/messages" class="row">
@@ -18,18 +32,41 @@
       <option value="">全部应用（{{ apps|length }} 个）</option>
       {% for a in apps %}<option value="{{ a.key }}" {% if a.key == app %}selected{% endif %}>{{ a.name }}</option>{% endfor %}
     </select>
+    <select name="min_tier" style="max-width:210px">
+      <option value="3" {% if min_tier == 3 %}selected{% endif %}>只看重要（微信/QQ/验证码…）</option>
+      <option value="4" {% if min_tier == 4 %}selected{% endif %}>只看关键（短信/来电）</option>
+      <option value="2" {% if min_tier == 2 %}selected{% endif %}>普通及以上</option>
+      <option value="0" {% if min_tier == 0 %}selected{% endif %}>全部（含系统噪音）</option>
+    </select>
     <input type="hidden" name="sort" value="{{ sort }}">
     <input type="hidden" name="order" value="{{ order }}">
     <button type="submit">筛选</button>
-    {% if q or device or mtype or app %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
+    {% if q or device or mtype or app or min_tier != 3 %}<a class="ghost" href="/panel/messages" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">清除筛选</a>{% endif %}
   </form>
-  <div class="hint">点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。<br>终端 / 类型 / 应用三个下拉是联动的 —— 选了一台手机后，应用里只会剩下它实际有的那些。</div>
+
+  <div class="stat" style="margin-top:10px">
+    当前范围（最近 {{ recent_keep }} 条）按级别分布：
+    <span class="tier t4">关键 {{ tier_counts[4] }}</span>
+    <span class="tier t3">重要 {{ tier_counts[3] }}</span>
+    <span class="tier t2">普通 {{ tier_counts[2] }}</span>
+    <span class="tier t1">次要 {{ tier_counts[1] }}</span>
+    <span class="tier t0">噪音 {{ tier_counts[0] }}</span>
+    {% if hidden_low %}<b>　→ 已折叠 {{ hidden_low }} 条次要/噪音</b>（原始数据没删，选「全部」就能看到）{% endif %}
+  </div>
+
+  <div class="hint" style="margin-top:8px">
+    点表头字段名排序（再点一次切换升/降序）；点「内容」列的摘要可展开看全文。<br>
+    <b>级别</b>是自动判定的：短信/来电/验证码 = 关键，真人消息（微信/QQ…）= 重要，
+    系统组件自报状态（"正在后台运行"这类）= 噪音。<br>
+    想看更早的历史？消息流只装最近 {{ recent_keep }} 条，更早的请用 <a href="/panel/search">归档搜索</a>。
+  </div>
 </div>
 
 <div class="card">
   {% if rows %}
   <table>
     <tr>
+      <th style="white-space:nowrap">级别</th>
       {% for key, label in sort_fields.items() %}
       <th style="white-space:nowrap">
         <a href="{{ sort_links[key] }}" style="color:{% if sort == key %}var(--accent){% else %}var(--dim){% endif %}">{{ label }}{% if sort == key %} {{ '▼' if order == 'desc' else '▲' }}{% endif %}</a>
@@ -38,15 +75,24 @@
     </tr>
     {% for r in rows %}
     <tr>
+      <td style="white-space:nowrap" {% if r.tier_reason %}title="{{ r.tier_reason }}"{% endif %}>
+        <span class="tier {{ r.tier_css }}">{{ r.tier_label }}</span>
+      </td>
       <td style="white-space:nowrap">{{ r.time }}</td>
-      <td style="white-space:nowrap">{{ {'sms':'短信','call':'来电','notify':'通知'}.get(r.type, r.type) }}</td>
+      <td style="white-space:nowrap">{{ {'sms':'短信','call':'来电','notify':'通知','sent':'已发送','location':'定位'}.get(r.type, r.type) }}</td>
       <td>{{ r.sender or '-' }}</td>
       <td>{{ r.app_display or '-' }}</td>
       <td style="white-space:nowrap">{{ r.device or '-' }}</td>
-      <td style="max-width:420px">
+      <td style="max-width:460px">
+        {% if r.ex.code %}<span class="code">{{ r.ex.code }}</span> {% endif %}
         <details>
-          <summary style="cursor:pointer">{{ (r.content or '(空)')[:70] }}{% if (r.content or '')|length > 70 %}…{% endif %}</summary>
-          <pre style="margin:8px 0 0;white-space:pre-wrap">{{ r.content or '(空)' }}</pre>
+          <summary style="cursor:pointer">{{ r.ex.summary or (r.content or '(空)') }}{% if r.ex.summary|length >= 60 %}…{% endif %}</summary>
+          {% if r.ex.title %}<div style="margin-top:8px"><b>{{ r.ex.title }}</b></div>{% endif %}
+          {% if r.ex.body %}<pre style="margin:6px 0 0;white-space:pre-wrap">{{ r.ex.body }}</pre>{% endif %}
+          {% if r.ex.amounts %}<div class="hint">金额：{{ r.ex.amounts|join(' / ') }}</div>{% endif %}
+          {% if r.ex.links %}<div class="hint">链接：{% for u in r.ex.links %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u[:60] }}</a> {% endfor %}</div>{% endif %}
+          <div class="hint" style="margin-top:6px">原始内容：</div>
+          <pre style="margin:4px 0 0;white-space:pre-wrap;color:var(--dim)">{{ r.content or '(空)' }}</pre>
           {% if r.archived %}<div class="hint">已归档</div>{% endif %}
         </details>
       </td>
@@ -58,7 +104,10 @@
     {% if page < pages %}<a class="ghost" href="/panel/messages?{{ qs }}&page={{ page + 1 }}" style="padding:8px 14px;border:1px solid var(--line);border-radius:6px">下一页</a>{% endif %}
   </div>
   {% else %}
-  <p>没有匹配的消息。{% if q or device or mtype or app %}换个筛选条件试试，或者 <a href="/panel/messages">清除筛选</a>。{% endif %}</p>
+  <p>没有匹配的消息。
+    {% if min_tier > 0 and hidden_low %}当前「只看重要」折叠了 {{ hidden_low }} 条，<a href="/panel/messages?min_tier=0">点这里看全部</a>。{% endif %}
+    {% if q or device or mtype or app %}换个筛选条件试试，或者 <a href="/panel/messages">清除筛选</a>。{% endif %}
+  </p>
   {% endif %}
 </div>
 {% endblock %}

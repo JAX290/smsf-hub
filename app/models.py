@@ -39,6 +39,10 @@ class Incoming:
     app_version: str = ""
     sim: str = ""
     ts: int = 0                    # 毫秒时间戳
+    # 消息分级：4 关键 / 3 重要 / 2 普通 / 1 次要 / 0 噪音；-1 表示还没算
+    # 由 classify.Priority 填充，面板和推送渠道都用它做过滤。
+    tier: int = -1
+    tier_reason: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property

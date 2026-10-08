@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block body %}
+<style>
+  .tier { display:inline-block; min-width:34px; text-align:center; padding:2px 7px; border-radius:10px;
+          font-size:12px; font-weight:600; white-space:nowrap; }
+  .t4 { background:#fee2e2; color:#b91c1c; }
+  .t3 { background:#dbeafe; color:#1d4ed8; }
+  .t2 { background:#e5e7eb; color:#4b5563; }
+  .t1 { background:#f3f4f6; color:#9ca3af; }
+  .t0 { background:#f9fafb; color:#c0c4cc; }
+  .code { display:inline-block; padding:1px 8px; border-radius:8px; background:#fef3c7; color:#92400e;
+          font-weight:700; font-family:ui-monospace,Consolas,monospace; font-size:15px; }
+  .anom { padding:8px 12px; border-radius:8px; margin-bottom:8px; border-left:4px solid var(--line); }
+  .anom.bad { background:#fef2f2; border-left-color:#dc2626; }
+  .anom.warn { background:#fffbeb; border-left-color:#f59e0b; }
+  .anom.info { background:#f0f9ff; border-left-color:#0ea5e9; }
+  .anom b { display:block; margin-bottom:2px; }
+  .bar { display:inline-block; height:12px; background:var(--accent); border-radius:3px; vertical-align:middle; }
+  .kpi { font-size:26px; font-weight:700; }
+  .kpi small { font-size:13px; font-weight:400; color:var(--dim); }
+</style>
+
+{% if anomalies %}
+<div class="card">
+  <h2>需要看一眼（{{ anomalies|length }}）</h2>
+  {% for a in anomalies %}
+  <div class="anom {{ a.level }}">
+    <b>{{ a.title }}</b>
+    <span class="hint">{{ a.detail }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ summary.day }} 摘要</h2>
+  <div class="row" style="gap:28px;align-items:flex-end">
+    <div><div class="kpi">{{ summary.important }}<small> 条重要</small></div>
+      <div class="hint">真正要看的东西</div></div>
+    <div><div class="kpi">{{ summary.total }}<small> 条合计</small></div>
+      <div class="hint">含噪音</div></div>
+    <div><div class="kpi">{{ summary.noise }}<small> 条噪音</small></div>
+      <div class="hint">系统/应用自报状态</div></div>
+    <div><div class="kpi">{{ summary.code_total }}<small> 个验证码</small></div>
+      <div class="hint">单独列在下面</div></div>
+    <div><div class="kpi">{{ summary.call_total }}<small> 通来电</small></div>
+      <div class="hint">&nbsp;</div></div>
+  </div>
+  <div style="margin-top:12px">
+    <span class="tier t4">关键 {{ summary.tiers[4] }}</span>
+    <span class="tier t3">重要 {{ summary.tiers[3] }}</span>
+    <span class="tier t2">普通 {{ summary.tiers[2] }}</span>
+    <span class="tier t1">次要 {{ summary.tiers[1] }}</span>
+    <span class="tier t0">噪音 {{ summary.tiers[0] }}</span>
+  </div>
+
+  <h3 style="margin-top:18px">重要消息里出现最多的应用</h3>
+  {% if summary.top_apps %}
+  <table>
+    {% for app, n in summary.top_apps %}
+    <tr><td style="width:60%">{{ app }}</td>
+        <td><span class="bar" style="width:{{ [n * 3, 240]|min }}px"></span> {{ n }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="hint">今天还没有重要消息。</p>{% endif %}
+
+  <h3 style="margin-top:18px">重要消息的时段分布</h3>
+  <div>
+    {% for h in summary.hourly %}
+      <span title="{{ h.hour }} 共 {{ h.n }} 条" class="bar"
+            style="width:14px;margin-right:2px;height:{{ 6 + h.n * 3 if h.n < 40 else 126 }}px;
+                   display:inline-block;opacity:{{ 0.25 + (0.75 * h.n / 20 if h.n < 20 else 1) }}"></span>
+    {% endfor %}
+  </div>
+  <div class="hint">00 时 → 23 时（柱高 = 该小时的重要消息条数）</div>
+
+  {% if summary.devices %}
+  <h3 style="margin-top:18px">按手机</h3>
+  <div>
+    {% for d, n in summary.devices %}<span class="tier t2">{{ d }} {{ n }}</span> {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+{% if summary.codes %}
+<div class="card">
+  <h2>今天的验证码（{{ summary.code_total }}）</h2>
+  <table>
+    <tr><th style="white-space:nowrap">时间</th><th style="white-space:nowrap">验证码</th>
+        <th>来源</th><th>原文摘要</th></tr>
+    {% for c in summary.codes %}
+    <tr>
+      <td style="white-space:nowrap">{{ c.time }}</td>
+      <td><span class="code">{{ c.code }}</span></td>
+      <td>{{ c.app }}</td>
+      <td class="hint">{{ c.summary }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+{% if summary.calls %}
+<div class="card">
+  <h2>今天的来电（{{ summary.call_total }}）</h2>
+  <table>
+    <tr><th style="white-space:nowrap">时间</th><th>号码</th><th>手机</th></tr>
+    {% for c in summary.calls %}
+    <tr><td style="white-space:nowrap">{{ c.time }}</td><td>{{ c.from }}</td><td>{{ c.device }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>关键词监控（{{ hits|length }} 条命中）</h2>
+  <div class="hint">关注的词：{{ keywords|join('、') }}<br>
+    可在「参数设置 → 分析监控」里改这串词。</div>
+  {% if hits %}
+  <table>
+    <tr><th style="white-space:nowrap">时间</th><th style="white-space:nowrap">级别</th>
+        <th>应用</th><th>命中</th><th>摘要</th></tr>
+    {% for h in hits %}
+    <tr>
+      <td style="white-space:nowrap">{{ h.time[5:] }}</td>
+      <td><span class="tier t{{ h.tier }}">{{ {'4':'关键','3':'重要','2':'普通','1':'次要','0':'噪音'}[h.tier|string] }}</span></td>
+      <td>{{ h.app }}</td>
+      <td>{{ h.keyword }}</td>
+      <td>{{ h.summary }}{% if h.code %} <span class="code">{{ h.code }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="hint">最近消息里没有命中关注词的内容。</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>最近 {{ days }} 天趋势</h2>
+  <table>
+    <tr><th>日期</th><th>重要</th><th>关键</th><th>普通</th><th>次要</th><th>噪音</th><th>合计</th></tr>
+    {% for t in trend %}
+    <tr>
+      <td style="white-space:nowrap">{{ t.day }}</td>
+      <td><b>{{ t.important }}</b></td>
+      <td>{{ t.t4 }}</td>
+      <td>{{ t.t3 }}</td>
+      <td>{{ t.t2 }}</td>
+      <td>{{ t.t1 }}</td>
+      <td>{{ t.t0 }}</td>
+      <td>{{ t.total }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="hint">只统计消息流内存里的最近 {{ recent_keep }} 条（更早的请用「归档搜索」）；
+    「重要」= 关键 + 重要。</div>
+</div>
+{% endblock %}

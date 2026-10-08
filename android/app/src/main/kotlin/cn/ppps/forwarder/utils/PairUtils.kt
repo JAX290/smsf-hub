@@ -30,9 +30,17 @@ object PairUtils {
     private const val TAG = "PairUtils"
 
     /**
-     * 配对钥匙。必须与服务器 config.yaml 里 security.pair_key 完全一致。
+     * 派生配对钥匙用的盐。改动它等于让所有旧 APK 失联，别动。
      */
-    private const val PAIR_KEY = "PUT_YOUR_PAIR_KEY_HERE"
+    private const val PAIR_DERIVE_SALT = "smsf-pair-v1"
+
+    /**
+     * 旧的编译期常量钥匙（兜底）。
+     *
+     * 老版本服务器只认这一把，所以留着 —— 但新版本服务器两把都接受，
+     * 而新 APK 会优先用域名派生的那把。
+     */
+    private const val LEGACY_PAIR_KEY = "PUT_YOUR_PAIR_KEY_HERE"
 
     /** 同一时间只允许一次配对请求 */
     private val busy = AtomicBoolean(false)
@@ -65,6 +73,60 @@ object PairUtils {
                 s.contains("Unauthorized", ignoreCase = true)
     }
 
+    /**
+     * 从上报地址里取出主机名（小写，去掉端口）。
+     * https://notic.example.com/smsf/hook/sms  ->  notic.example.com
+     */
+    private fun extractHost(url: String): String {
+        var s = url.trim()
+        val i = s.indexOf("://")
+        if (i >= 0) s = s.substring(i + 3)
+        s = s.substringBefore('/')
+        s = s.substringAfterLast('@')
+        if (s.startsWith("[")) {                 // IPv6 字面量
+            s = s.substringBefore(']').removePrefix("[")
+        } else {
+            s = s.substringBefore(':')
+        }
+        return s.trim().lowercase()
+    }
+
+    /**
+     * 从域名派生配对钥匙：HMAC-SHA256(key=salt, msg=域名) 的十六进制小写。
+     *
+     * 为什么要这么做：域名是【焊死在 APK 里】的，换 VPS 时它不变，
+     * 所以新服务器和老手机能各自算出同一把钥匙 ——
+     * 换服务器不需要用户记着、传递任何东西。
+     *
+     * 服务端 app/verify.py 的 derive_pair_key() 用完全一样的算法，
+     * 两边任何一处改了都要同步，否则会静默失联。
+     */
+    private fun deriveKey(host: String): String {
+        if (host.isEmpty()) return ""
+        return try {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(PAIR_DERIVE_SALT.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
+            val raw = mac.doFinal(host.toByteArray(StandardCharsets.UTF_8))
+            raw.joinToString("") { b -> "%02x".format(b.toInt() and 0xFF) }
+        } catch (e: Exception) {
+            Log.e(TAG, "派生配对钥匙失败：" + e.message)
+            ""
+        }
+    }
+
+    /**
+     * 按优先级列出候选钥匙。
+     *   ① 域名派生（首选）
+     *   ② 编译期常量（兜底，兼容老服务器）
+     */
+    private fun candidateKeys(webServer: String): List<String> {
+        val out = mutableListOf<String>()
+        val derived = deriveKey(extractHost(webServer))
+        if (derived.isNotEmpty()) out.add(derived)
+        if (LEGACY_PAIR_KEY.isNotEmpty() && LEGACY_PAIR_KEY !in out) out.add(LEGACY_PAIR_KEY)
+        return out
+    }
+
     /** 从上报地址推出配对地址： .../smsf/hook/sms -> .../smsf/pair */
     private fun pairUrl(webServer: String): String {
         val i = webServer.indexOf("/hook")
@@ -72,10 +134,10 @@ object PairUtils {
     }
 
     /** 配对签名：HMAC-SHA256(key=pair_key, msg=ts + 换行 + device + 换行 + pair_key) */
-    private fun calcSign(timestamp: String, device: String): String {
-        val stringToSign = timestamp + "\n" + device + "\n" + PAIR_KEY
+    private fun calcSign(pairKey: String, timestamp: String, device: String): String {
+        val stringToSign = timestamp + "\n" + device + "\n" + pairKey
         val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(PAIR_KEY.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
+        mac.init(SecretKeySpec(pairKey.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
         val raw = mac.doFinal(stringToSign.toByteArray(StandardCharsets.UTF_8))
         return URLEncoder.encode(String(Base64.encode(raw, Base64.NO_WRAP)), "UTF-8")
     }
@@ -108,35 +170,69 @@ object PairUtils {
         }
         lastAttemptAt = now
 
+        val device = SettingUtils.extraDeviceMark
+        val keys = candidateKeys(webServer)
+        Log.i(TAG, "候选配对钥匙 " + keys.size + " 把")
+        tryKeys(url, keys, 0, device, now, onDone)
+    }
+
+    /**
+     * 依次用每把候选钥匙试一次。
+     *
+     * 为什么要分情况：服务器拒绝的原因有两类，处理方式完全不同 ——
+     *   · 401 签名校验失败  -> 是钥匙不对，换下一把继续试
+     *   · 403 闸门没开      -> 换什么钥匙都没用，直接放弃（这是正常情况）
+     */
+    private fun tryKeys(
+        url: String,
+        keys: List<String>,
+        index: Int,
+        device: String,
+        ts: Long,
+        onDone: (String?) -> Unit
+    ) {
+        if (index >= keys.size) {
+            busy.set(false)
+            Log.e(TAG, "所有候选钥匙都没配上（共 " + keys.size + " 把）")
+            onDone(null)
+            return
+        }
+        val key = keys[index]
+        val sign = calcSign(key, ts.toString(), device)
+        val body = Gson().toJson(mapOf("device" to device, "ts" to ts, "sign" to sign))
+        Log.i(TAG, "发起配对（第 " + (index + 1) + "/" + keys.size + " 把钥匙）：$url")
         try {
-            val device = SettingUtils.extraDeviceMark
-            val sign = calcSign(now.toString(), device)
-            val body = Gson().toJson(mapOf("device" to device, "ts" to now, "sign" to sign))
-            Log.i(TAG, "发起配对：$url")
             XHttp.post(url).keepJson(true).upJson(body).execute(object : SimpleCallBack<String>() {
                 override fun onSuccess(response: String) {
-                    busy.set(false)
                     val secret = parseSecret(response)
                     if (secret.isNullOrEmpty()) {
                         Log.e(TAG, "配对响应里没有 secret：$response")
+                        busy.set(false)
                         onDone(null)
                     } else {
+                        busy.set(false)
                         Log.i(TAG, "配对成功，已取回新 secret（长度 " + secret.length + "）")
                         onDone(secret)
                     }
                 }
 
                 override fun onError(e: ApiException) {
-                    busy.set(false)
-                    // 服务器闸门没开时这里是 403 —— 属于正常情况，不重试
-                    Log.e(TAG, "配对失败：" + e.detailMessage)
-                    onDone(null)
+                    val msg = (e.detailMessage ?: "") + " " + (e.displayMessage ?: "")
+                    // 闸门没开 —— 换钥匙也没用，直接放弃
+                    if (msg.contains("配对未开启") || msg.contains("未开启") || msg.contains("403")) {
+                        busy.set(false)
+                        Log.i(TAG, "配对闸门没开，放弃（这是正常情况）：" + e.detailMessage)
+                        onDone(null)
+                        return
+                    }
+                    // 其余情况（多半是 401 钥匙不对）—— 换下一把再试
+                    Log.i(TAG, "第 " + (index + 1) + " 把钥匙没配上，换下一把：" + e.detailMessage)
+                    tryKeys(url, keys, index + 1, device, ts, onDone)
                 }
             })
         } catch (e: Exception) {
-            busy.set(false)
-            Log.e(TAG, "配对异常：" + e.message)
-            onDone(null)
+            Log.e(TAG, "配对异常（第 " + (index + 1) + " 把）：" + e.message)
+            tryKeys(url, keys, index + 1, device, ts, onDone)
         }
     }
 

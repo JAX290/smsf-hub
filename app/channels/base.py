@@ -108,7 +108,9 @@ class Channel(ABC):
     # ---------- 转发规则 ----------
 
     def accepts(self, item: Incoming) -> bool:
-        """这条消息该不该发到这个终端。三个规则都通过才发；留空 = 不限制。"""
+        """这条消息该不该发到这个终端。四个规则都通过才发；留空 = 不限制。"""
+        if not self._match_tier(item):
+            return False
         if not self._match_type(item):
             return False
         if not _hit(split_rule(self.rules.get("apps")),
@@ -118,6 +120,28 @@ class Channel(ABC):
                     [item.device, item.device_key, str(item.raw.get("_device_raw") or "")]):
             return False
         return True
+
+    def _match_tier(self, item: Incoming) -> bool:
+        """按消息分级过滤：低于 min_tier 的不推。
+
+        默认门槛取 config.yaml 的 priority.min_push_tier（3 = 重要及以上），
+        某个终端也可以用自己的 min_tier 覆盖它 —— 比如「全部消息」终端设 0。
+        """
+        if not self.app_cfg.get("priority.enable", True):
+            return True
+        want = self.rules.get("min_tier")
+        if want in (None, ""):
+            want = self.app_cfg.get("priority.min_push_tier", 3)
+        try:
+            want = int(want)
+        except (TypeError, ValueError):
+            return True
+        if want <= 0:
+            return True
+        tier = getattr(item, "tier", -1)
+        if tier is None or tier < 0:
+            return True          # 没算过就不拦，避免误伤
+        return int(tier) >= want
 
     def _match_type(self, item: Incoming) -> bool:
         wanted = split_rule(self.rules.get("types"))

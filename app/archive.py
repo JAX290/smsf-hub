@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
+from .classify import extract
 from .models import Incoming, TYPE_DIR
 
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -30,13 +32,15 @@ def safe_name(raw: str, fallback: str = "未知") -> str:
 
 class Archive:
     def __init__(self, root: Path, subject_rules: dict, file_max_mb: float,
-                 total_max_mb: float, warn_percent: float, content_max_chars: int):
+                 total_max_mb: float, warn_percent: float, content_max_chars: int,
+                 warn_free_gb: float = 2.0):
         self.root = Path(root)
         self.subject_rules = subject_rules or {}
         self.file_max_bytes = int(float(file_max_mb) * 1024 * 1024)
         self.total_max_bytes = int(float(total_max_mb) * 1024 * 1024)
         self.warn_percent = float(warn_percent)
         self.content_max_chars = int(content_max_chars or 0)
+        self.warn_free_bytes = int(float(warn_free_gb) * 1024 * 1024 * 1024)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _rule_for(self, msg: Incoming) -> str:
@@ -76,6 +80,29 @@ class Archive:
         dirpath.mkdir(parents=True, exist_ok=True)
         day = msg.when.strftime("%Y-%m-%d")
         target = self._target_file(dirpath, day)
+
+        # 噪音（层级 0，即系统/应用自报状态）只留一行摘要 ——
+        # 用户明确要求：「一些系统组件的提示没什么作用，可以把优先度降低」。
+        # 但仍然照常归档（原始数据不丢），搜索页也能搜到。
+        if getattr(msg, "tier", -1) == 0:
+            try:
+                one = extract(msg).get("summary") or (msg.content or "")
+            except Exception:
+                one = (msg.content or "").strip().replace("\n", " ")
+            one = one.strip().replace("\n", " ")
+            if len(one) > 120:
+                one = one[:120] + "…"
+            lines = [
+                f"## {msg.when.strftime('%H:%M:%S')}  {msg.sender or msg.app or '未知'}",
+                f"- [噪音] {one}",
+                "",
+            ]
+            new_file = not target.exists()
+            with target.open("a", encoding="utf-8") as f:
+                if new_file:
+                    f.write(f"# {target.stem} —— {msg.subject(self._rule_for(msg))}\n\n")
+                f.write("\n".join(lines))
+            return target
 
         content = msg.content or ""
         if self.content_max_chars and len(content) > self.content_max_chars:
@@ -119,13 +146,31 @@ class Archive:
         used = self.total_bytes()
         pct = (used / self.total_max_bytes * 100) if self.total_max_bytes else 0
         level = "red" if pct >= 100 else ("yellow" if pct >= self.warn_percent else "green")
+
+        # 归档【永不自动删除】—— 用户要求原始数据一直留着。
+        # 所以这里除了看归档自己占了多少，还要看磁盘快不快满了。
+        free_bytes = total_bytes = 0
+        try:
+            du = shutil.disk_usage(str(self.root))
+            free_bytes, total_bytes = du.free, du.total
+        except OSError:
+            pass
+        free_low = bool(self.warn_free_bytes and free_bytes and free_bytes < self.warn_free_bytes)
+        if free_low:
+            level = "red"
+
         return {
             "used_bytes": used,
             "used_mb": round(used / 1024 / 1024, 2),
             "limit_mb": round(self.total_max_bytes / 1024 / 1024, 2),
             "percent": round(pct, 1),
             "level": level,
-            "need_download": level == "red",
+            "need_download": bool(level == "red" or free_low),
+            "free_gb": round(free_bytes / 1024 / 1024 / 1024, 2),
+            "disk_gb": round(total_bytes / 1024 / 1024 / 1024, 2),
+            "free_low": free_low,
+            # 归档不做压缩/删除，只在快满时提示下载
+            "auto_delete": False,
         }
 
     def list_groups(self, device: str = "") -> list:

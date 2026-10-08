@@ -7,6 +7,8 @@ type 决定控件类型，choices 是下拉选项。
 from __future__ import annotations
 
 GROUP_LABELS = {
+    "priority": "消息分级（降噪）",
+    "analysis": "分析监控",
     "merge": "合并发送",
     "dedup": "去重",
     "archive": "归档",
@@ -16,6 +18,48 @@ GROUP_LABELS = {
 }
 
 SCHEMA = [
+    # ---- 消息分级（降噪核心）----
+    # 判定「真正通知用户的消息」和「系统/应用自报状态」。
+    # 判定优先看手机端上报的通知属性（常驻/类别/渠道重要度），再看类型、应用清单、关键词。
+    {"group": "priority", "path": "priority.enable", "label": "启用消息分级", "type": "bool",
+     "hint": "关掉就退回旧行为：所有消息一律同等对待"},
+    {"group": "priority", "path": "priority.min_push_tier", "label": "推送门槛（低于此级别只归档不推送）",
+     "type": "choice",
+     "choices": [["4", "只推「关键」（短信/来电/验证码）"],
+                 ["3", "推「重要」及以上（推荐：含微信/QQ 等真人消息）"],
+                 ["2", "推「普通」及以上（噪音也会推，不推荐）"],
+                 ["0", "全部推送（等于不分级）"]],
+     "hint": "消息流面板不受这个影响，它只管「推送渠道」发不发"},
+    {"group": "priority", "path": "priority.important_apps",
+     "label": "重要应用清单（包名或名称）", "type": "str",
+     "hint": "逗号分隔。命中即判为「重要」。留空 = 用内置默认（微信/QQ/钉钉/飞书/Telegram 等）"},
+    {"group": "priority", "path": "priority.noise_apps",
+     "label": "噪音应用清单（包名或名称）", "type": "str",
+     "hint": "逗号分隔。命中即判为「噪音」，面板默认折叠、归档只留一行摘要。"
+             "留空 = 用内置默认（系统组件、VPN、音乐播放器等自报状态的）"},
+    {"group": "priority", "path": "priority.important_keywords",
+     "label": "关键关键词（命中即判为「关键」）", "type": "str",
+     "hint": "逗号分隔，例如 验证码,转账,快递,挂号。留空 = 用内置默认"},
+    {"group": "priority", "path": "priority.noise_keywords",
+     "label": "噪音关键词（命中即判为「噪音」）", "type": "str",
+     "hint": "逗号分隔，例如 正在后台运行,正在获取,睡眠服务。留空 = 用内置默认"},
+
+    # ---- 分析监控 ----
+    {"group": "analysis", "path": "analysis.enable", "label": "启用分析监控", "type": "bool",
+     "hint": "「分析监控」页的每日摘要 / 关键词监控 / 异常检测。只读不改数据"},
+    {"group": "analysis", "path": "analysis.watch_keywords",
+     "label": "关注词（命中就单独列出来）", "type": "str",
+     "hint": "逗号分隔。留空 = 用内置默认（验证码/转账/扣款/登录/异常/快递…）"},
+    {"group": "analysis", "path": "analysis.spike_factor",
+     "label": "通知量暴涨倍数", "type": "float", "min": 1.5, "max": 20,
+     "hint": "某应用某一小时的条数 ≥ 它平均每小时的这个倍数，就提醒你"},
+    {"group": "analysis", "path": "analysis.spike_min_count",
+     "label": "通知量暴涨下限（条）", "type": "int", "min": 5, "max": 500,
+     "hint": "太少的量不值得提醒"},
+    {"group": "analysis", "path": "analysis.code_burst",
+     "label": "验证码突增阈值（条/小时）", "type": "int", "min": 2, "max": 100,
+     "hint": "一小时内验证码达到这个数就报警 —— 可能是有人在拿你的号试探注册/登录"},
+
     # ---- 合并发送 ----
     {"group": "merge", "path": "merge.enable", "label": "启用合并发送", "type": "bool",
      "hint": "把短时间内的多条消息合并成一条再推送，避免刷屏、也绕开渠道限流"},
