@@ -45,7 +45,6 @@ def is_heartbeat(msg: Incoming) -> bool:
 # 套完 JSON 结构就散了。用这种行格式即使被前后包了别的内容，也能正则捞出来。
 HEARTBEAT_RE = re.compile(r"HBT\|([^|]*)\|([^|]*)\|([^|]*)\|working=(\d)")
 
-
 def parse_heartbeat(content: str) -> dict:
     """把心跳负载解析成 update_heartbeat 要的 dict。解析不了就返回空。"""
     m = HEARTBEAT_RE.search(content or "")
@@ -67,6 +66,62 @@ def parse_heartbeat(content: str) -> dict:
         "code": code_i,
         "perms": perms,
         "working": working == "1",
+    }
+
+
+# ---- 摘要包（手机端攒一波再发）---------------------------------------------
+#
+# 为什么要攒：手机每发一条消息就要唤醒一次射频。实测某台手机一天 715 条消息
+# = 715 次射频唤醒，其中 73% 是「重要」级别的真人消息、20% 是系统状态噪音。
+# 攒成一批只发一次，能把唤醒次数压到 1/6 左右（见 README 的说明）。
+#
+# 约定：手机端把 N 条消息打成**一个 POST**，content 形如：
+#     DIG|2
+#     {"ts":1790697000000,"k":"notify","a":"com.tencent.mm","n":"微信","ti":"张三","c":"晚上吃饭吗"}
+#     {"ts":1790697060000,"k":"notify","a":"com.mi.health","n":"","ti":"","c":"睡眠服务后台运行中"}
+# 服务端在这里**拆回 N 条**，各自走正常的去重/分级/归档流程 ——
+# 所以归档和面板的粒度完全不变，只是传输由 N 次变 1 次。
+DIGEST_RE = re.compile(r"^\s*DIG\|(\d+)\s*$", re.M)
+
+
+def parse_digest(content: str) -> list:
+    """把摘要包拆成条目列表；不是摘要包就返回空列表。"""
+    text = content or ""
+    if "DIG|" not in text:
+        return []
+    m = DIGEST_RE.search(text)
+    if not m:
+        return []
+    items = []
+    for line in text[m.end():].splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            items.append(obj)
+    return items
+
+
+def digest_config(cfg) -> dict:
+    """手机端摘要窗口的配置。挂在心跳响应里下发，手机端会自动应用 ——
+    这样面板改完就能生效，不用重新编译 APK。"""
+    def _int(key, default):
+        try:
+            return int(cfg.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "enable": bool(cfg.get("digest.enable", True)),
+        "near_minutes": _int("digest.near_minutes", 15),
+        "daily_hours": _int("digest.daily_hours", 24),
+        "instant_apps": str(cfg.get("digest.instant_apps", "") or ""),
+        "instant_keywords": str(cfg.get("digest.instant_keywords", "") or ""),
+        "max_items": _int("digest.max_items", 200),
     }
 
 # ---- 手机端上报格式的兼容处理 ----------------------------------------------
@@ -249,9 +304,34 @@ class Pipeline:
                 self.stats["heartbeats"] = self.stats.get("heartbeats", 0) + 1
                 log.info("收到心跳：设备=%s 版本=%s 权限=%s",
                          raw_device, status.get("version", "?"), status.get("perms", {}))
-                return {"status": "heartbeat", "received": self.stats["received"]}
+                # 顺带把「摘要窗口」配置下发下去：手机端收到后自动应用，
+                # 所以面板上改完就能生效，不用重新编译 APK。
+                return {"status": "heartbeat", "received": self.stats["received"],
+                        "digest": digest_config(self.cfg)}
         except Exception:
             log.exception("手机登记失败")
+
+        # 【摘要包】手机端攒了一批消息只发一次，这里拆回 N 条各自走正常流程。
+        # 注意要放在去重/归档之前 —— 拆开之后每条才会按自己的内容去重和判级。
+        digest_items = parse_digest(msg.content)
+        if digest_items:
+            done = 0
+            for it in digest_items:
+                sub = dict(payload)
+                sub["type"] = str(it.get("k") or "notify")
+                sub["from"] = str(it.get("a") or "")
+                sub["app"] = str(it.get("n") or "")
+                sub["title"] = str(it.get("ti") or "")
+                sub["content"] = str(it.get("c") or "")
+                if it.get("ts"):
+                    sub["ts"] = str(it["ts"])
+                try:
+                    await self.handle(sub, source_ip)
+                    done += 1
+                except Exception:
+                    log.exception("摘要包里的条目处理失败")
+            log.info("收到摘要包：设备=%s 共 %d 条", raw_device, done)
+            return {"status": "digest", "items": done, "received": self.stats["received"]}
 
         # 兼容手机端的通知上报格式（包名在 sender、正文带 UID 行）
         _t, _s, _a = classify_notify(msg.type, msg.sender, msg.content)

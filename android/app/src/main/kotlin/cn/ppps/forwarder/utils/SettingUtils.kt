@@ -104,6 +104,26 @@ class SettingUtils private constructor() {
         // 默认开：这些通知对用户零信息量，白白占带宽和存储。
         var enableSkipSystemStatusNoise: Boolean by SharedPreference(SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE, true)
 
+        // ===== 【v55】攒批发送 =====
+        // 手机端不再「来一条发一条」，而是先攒进 Digest 表、到点合并成一个请求发出去。
+        // 实测某台手机一天 715 条消息 = 715 次射频唤醒，攒批后约 120 次（降到 1/6）。
+        //
+        // 下面这几个值由服务端通过**心跳响应**下发（面板上改完就生效，不用重装 APK），
+        // 这里只是本地副本 + 兜底默认值。
+        var enableDigest: Boolean by SharedPreference(SP_ENABLE_DIGEST, true)
+        // 普通通知（含微信/QQ/Telegram 这类真人消息）攒多久发一波
+        var digestNearMinutes: Int by SharedPreference(SP_DIGEST_NEAR_MINUTES, 15)
+        // 系统/应用状态类（常驻、"正在后台运行"）攒多久发一波
+        var digestDailyHours: Int by SharedPreference(SP_DIGEST_DAILY_HOURS, 24)
+        // 这些应用的通知立即发（逗号分隔，包名或名称子串）
+        var digestInstantApps: String by SharedPreference(SP_DIGEST_INSTANT_APPS, "")
+        // 命中这些词立即发（验证码这类晚一秒都不行）
+        var digestInstantKeywords: String by SharedPreference(
+            SP_DIGEST_INSTANT_KEYWORDS,
+            "验证码,校验码,动态码,短信密码,一次性密码,扣款,转账,支出,退款,登录,密码")
+        // 一个摘要包最多带几条
+        var digestMaxItems: Int by SharedPreference(SP_DIGEST_MAX_ITEMS, 200)
+
         //无声音乐唤醒间隔（秒，越大越省电）
         var musicInterval: Int by SharedPreference(SP_MUSIC_INTERVAL, 10)
 

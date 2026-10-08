@@ -44,6 +44,12 @@
   判据是通知自身的属性（常驻 + 类别属于 service/progress/transport/sysinfo）且
   发送方是系统应用（uid < 10000）；第三方 App 的状态通知照旧上报，
   由服务端判成「噪音」并在归档里只留一行摘要。见 `NotificationService.isSystemStatusNoise()`
+- **v55：攒批发送**。通知先进本地 `Digest` 表，到点由 `DigestWorker` 合并成
+  **一个请求**发出去（content 形如 `DIG|N` + N 行 JSON），服务端
+  `pipeline.parse_digest()` 再拆回一条条，归档粒度不变。
+  短信/来电/已发送/定位以及命中「立即关键词」（验证码/扣款…）的**立即发**。
+  窗口值由服务端通过**心跳响应**下发（`HeartbeatWorker.applyDigestConfig`），
+  面板改完即生效，不用重装 APK。实测一天 715 次射频唤醒 → 约 120 次
 
 ### 保活
 - Cactus 多进程保活；定位改**被动模式**（`PASSIVE_PROVIDER`），消除系统定位提示
@@ -74,4 +80,8 @@ make_glyph.py    # 磁贴/通知小图标（drawable-*/ic_forwarder.png，白色
 
 ## 数据库版本
 
-`AppDatabase` 当前 `version = 25`。改动表结构时记得同时加迁移。
+`AppDatabase` 当前 `version = 26`。改动表结构时记得同时加迁移。
+
+- 25：离线待发队列（给 Logs 加 `retry_count` / `next_retry_at`）
+- **26：攒批发送（新增 `Digest` 表）** —— 表结构必须和 `entity/Digest.kt` 完全一致，
+  否则 Room 的 schema 校验会失败，App 一启动就崩。

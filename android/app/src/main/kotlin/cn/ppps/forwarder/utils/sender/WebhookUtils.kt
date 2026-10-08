@@ -45,7 +45,11 @@ class WebhookUtils {
             rule: Rule? = null,
             senderIndex: Int = 0,
             logId: Long = 0L,
-            msgId: Long = 0L
+            msgId: Long = 0L,
+            // 【v55】可选：把响应体回调给调用方。心跳用它接收服务端下发的
+            // 「摘要窗口」配置（面板改完手机端自动生效，不用重装 APK）。
+            // 不传就完全保持原行为。
+            onResponse: ((String) -> Unit)? = null
         ) {
             val from: String = msgInfo.from
             val content: String = if (rule != null) {
@@ -304,6 +308,13 @@ class WebhookUtils {
 
                     override fun onSuccess(response: String) {
                         Log.i(TAG, response)
+                        // 【v55】把响应体回调出去（心跳用它接收服务端下发的摘要配置）。
+                        // 回调里出错绝不能影响原来的成功处理，所以整段包在 try 里。
+                        try {
+                            onResponse?.invoke(response)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "onResponse 回调异常: ${e.message}")
+                        }
                         val status = if (setting.response.isNotEmpty() && !response.contains(setting.response)) 0 else 2
                         SendUtils.updateLogs(logId, status, response)
                         SendUtils.senderLogic(status, msgInfo, rule, senderIndex, msgId)

@@ -52,6 +52,7 @@ import cn.ppps.forwarder.utils.Preset
 import cn.ppps.forwarder.utils.ProximitySensorScreenHelper
 import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.SharedPreference
+import cn.ppps.forwarder.workers.DigestWorker
 import cn.ppps.forwarder.workers.HeartbeatWorker
 import cn.ppps.forwarder.workers.OfflineRetryWorker
 import cn.ppps.forwarder.utils.sdkinit.UMengInit
@@ -291,6 +292,12 @@ class App : Application(), CactusCallback, Configuration.Provider by Core {
             //⚠️ 只在主进程启动，避免 :cactusRemoteService 里又排一份。
             if (isMainProcess()) {
                 HeartbeatWorker.schedule(this)
+            }
+
+            //【v55 新增】攒批发送：启动时冲刷一次积压的摘要队列（进程被杀期间攒下的），
+            //然后按最早到期时间排下一次。同样只在主进程做。
+            if (SettingUtils.enableDigest && isMainProcess()) {
+                DigestWorker.schedule(this)
             }
 
             //监听锁屏&解锁

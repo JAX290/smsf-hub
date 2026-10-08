@@ -195,6 +195,12 @@ class Priority:
             if cat and cat in CATEGORY_TIER:
                 tier = CATEGORY_TIER[cat]
                 reason = f"通知类别={cat}"
+                # 【重要】命中关键关键词的要**升级**为「关键」：
+                # 验证码/扣款这类短信，很多 ROM 会以 category=msg 的通知发出来，
+                # 只按类别看会停在「重要」，但用户要的是置顶（实测踩过）。
+                kw = self._hit_any(self.important_keywords, [msg.title, content])
+                if kw and tier < 4:
+                    return 4, f"命中关键关键词「{kw}」（通知类别={cat}）"
                 grp = attrs.get("grp")
                 if grp == "1" and tier >= 2:
                     tier -= 1

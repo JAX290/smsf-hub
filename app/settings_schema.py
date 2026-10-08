@@ -7,6 +7,7 @@ type 决定控件类型，choices 是下拉选项。
 from __future__ import annotations
 
 GROUP_LABELS = {
+    "digest": "手机攒批发送",
     "priority": "消息分级（降噪）",
     "analysis": "分析监控",
     "merge": "合并发送",
@@ -18,6 +19,28 @@ GROUP_LABELS = {
 }
 
 SCHEMA = [
+    # ---- 手机攒批发送 ----
+    # 手机端把消息攒成一批只发一次，省射频唤醒（实测一天 715 次 → 约 120 次）。
+    # 这几个值由服务端通过心跳响应下发，改完手机端自动生效，不用重装 APK。
+    {"group": "digest", "path": "digest.enable", "label": "启用手机端攒批发送", "type": "bool",
+     "hint": "关掉就退回「来一条发一条」（费电但最实时）"},
+    {"group": "digest", "path": "digest.near_minutes",
+     "label": "普通通知攒多久发一波（分钟）", "type": "int", "min": 0, "max": 1440,
+     "hint": "真人消息（微信/QQ/Telegram）也在这一档。0 = 立即发。默认 15 分钟"},
+    {"group": "digest", "path": "digest.daily_hours",
+     "label": "系统状态类攒多久发一波（小时）", "type": "int", "min": 0, "max": 168,
+     "hint": "「正在后台运行」「睡眠服务运行中」这类零信息量的常驻通知。默认 24 小时；"
+             "设 72 就是三天一批"},
+    {"group": "digest", "path": "digest.instant_apps",
+     "label": "这些应用的通知立即发（包名或名称）", "type": "str",
+     "hint": "逗号分隔。留空 = 只有短信/来电/定位和下面的关键词立即发"},
+    {"group": "digest", "path": "digest.instant_keywords",
+     "label": "命中这些词立即发", "type": "str",
+     "hint": "逗号分隔。默认验证码/扣款/转账/登录这类 —— 晚一秒都不行的那种"},
+    {"group": "digest", "path": "digest.max_items",
+     "label": "一个摘要包最多几条", "type": "int", "min": 20, "max": 1000,
+     "hint": "太多就分几次发"},
+
     # ---- 消息分级（降噪核心）----
     # 判定「真正通知用户的消息」和「系统/应用自报状态」。
     # 判定优先看手机端上报的通知属性（常驻/类别/渠道重要度），再看类型、应用清单、关键词。

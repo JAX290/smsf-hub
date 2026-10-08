@@ -109,6 +109,11 @@ class Incoming:
             return default
 
         mtype = pick("type", "msg_type", "kind").lower()
+        # 手机端内部把「应用通知」叫 app，服务端叫 notify（见渠道规则的 TYPE_ALIAS）。
+        # 不转的话会落到下面的兜底分支变成 sms —— 于是每条通知都被当成短信
+        # （分级直接给成「关键」、归档也进错目录）。实测在摘要包里踩过一次。
+        if mtype == "app":
+            mtype = "notify"
         if mtype not in TYPE_DIR:
             mtype = "sms"
 

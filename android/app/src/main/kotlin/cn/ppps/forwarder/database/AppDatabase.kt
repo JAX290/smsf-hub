@@ -7,12 +7,14 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import cn.ppps.forwarder.database.dao.DigestDao
 import cn.ppps.forwarder.database.dao.FrpcDao
 import cn.ppps.forwarder.database.dao.LogsDao
 import cn.ppps.forwarder.database.dao.MsgDao
 import cn.ppps.forwarder.database.dao.RuleDao
 import cn.ppps.forwarder.database.dao.SenderDao
 import cn.ppps.forwarder.database.dao.TaskDao
+import cn.ppps.forwarder.database.entity.Digest
 import cn.ppps.forwarder.database.entity.Frpc
 import cn.ppps.forwarder.database.entity.Logs
 import cn.ppps.forwarder.database.entity.LogsDetail
@@ -28,9 +30,9 @@ import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.TAG_LIST
 
 @Database(
-    entities = [Frpc::class, Msg::class, Logs::class, Rule::class, Sender::class, Task::class],
+    entities = [Frpc::class, Msg::class, Logs::class, Rule::class, Sender::class, Task::class, Digest::class],
     views = [LogsDetail::class],
-    version = 25,
+    version = 26,
     exportSchema = false
 )
 @TypeConverters(ConvertersDate::class)
@@ -42,6 +44,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun ruleDao(): RuleDao
     abstract fun senderDao(): SenderDao
     abstract fun taskDao(): TaskDao
+
+    /** 【v55】待发摘要队列（攒一波再发） */
+    abstract fun digestDao(): DigestDao
 
     companion object {
         @Volatile
@@ -124,6 +129,7 @@ custom_domains = smsf.demo.com
                     MIGRATION_22_23,
                     MIGRATION_23_24,
         MIGRATION_24_25,
+        MIGRATION_25_26,
                 )
 
             /*if (BuildConfig.DEBUG) {
@@ -567,6 +573,30 @@ private val MIGRATION_24_25 = object : Migration(24, 25) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL("ALTER TABLE Logs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
         database.execSQL("ALTER TABLE Logs ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/**
+ * 【v55 新增】攒批发送：新建「待发摘要」表。
+ *
+ * 手机端把要攒的通知先放这张表，到点由 DigestWorker 合并成一个请求发出去。
+ * 表结构必须和 entity.Digest 完全一致，否则 Room 的 schema 校验会失败（启动即崩）。
+ */
+private val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "CREATE TABLE IF NOT EXISTS `Digest` (" +
+                    "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "`dueAt` INTEGER NOT NULL, " +
+                    "`time` INTEGER NOT NULL, " +
+                    "`tier` INTEGER NOT NULL, " +
+                    "`type` TEXT NOT NULL, " +
+                    "`from` TEXT NOT NULL, " +
+                    "`app` TEXT NOT NULL, " +
+                    "`title` TEXT NOT NULL, " +
+                    "`content` TEXT NOT NULL)"
+        )
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_Digest_dueAt` ON `Digest` (`dueAt`)")
     }
 }
 

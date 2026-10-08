@@ -21,6 +21,7 @@ import com.hjq.permissions.XXPermissions
 import com.hjq.permissions.permission.PermissionLists
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.Date
 import java.util.concurrent.TimeUnit
 
@@ -120,8 +121,32 @@ class HeartbeatWorker(context: Context, params: WorkerParameters) : CoroutineWor
             simInfo = ""
         )
         // 直接发，不走 SendWorker —— 心跳不该出现在消息流和日志里
-        WebhookUtils.sendMsg(setting, msg)
+        // 【v55】顺带接收服务端在响应里下发的「摘要窗口」配置并应用
+        WebhookUtils.sendMsg(setting, msg) { resp -> applyDigestConfig(resp) }
         Log.i(TAG, "心跳已发送")
+    }
+
+    /**
+     * 服务端在心跳响应里下发摘要窗口配置（见服务端 pipeline.digest_config），
+     * 这里应用到本地设置 —— 于是**面板上改完就生效，不用重装 APK**。
+     *
+     * 整段 best-effort：解析失败什么都不做，绝不影响心跳本身。
+     */
+    private fun applyDigestConfig(response: String) {
+        try {
+            val obj = JSONObject(response)
+            val d = obj.optJSONObject("digest") ?: return
+            if (d.has("enable")) SettingUtils.enableDigest = d.optBoolean("enable", true)
+            if (d.has("near_minutes")) SettingUtils.digestNearMinutes = d.optInt("near_minutes", 15)
+            if (d.has("daily_hours")) SettingUtils.digestDailyHours = d.optInt("daily_hours", 24)
+            if (d.has("instant_apps")) SettingUtils.digestInstantApps = d.optString("instant_apps", "")
+            if (d.has("instant_keywords")) SettingUtils.digestInstantKeywords = d.optString("instant_keywords", "")
+            if (d.has("max_items")) SettingUtils.digestMaxItems = d.optInt("max_items", 200)
+            Log.i(TAG, "已应用服务端下发的摘要配置：短窗=" + SettingUtils.digestNearMinutes +
+                    "分钟 日摘要=" + SettingUtils.digestDailyHours + "小时")
+        } catch (e: Exception) {
+            Log.e(TAG, "解析服务端摘要配置失败（忽略）: ${e.message}")
+        }
     }
 
     /**

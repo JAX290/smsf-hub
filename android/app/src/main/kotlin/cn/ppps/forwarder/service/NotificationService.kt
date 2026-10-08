@@ -11,12 +11,15 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import cn.ppps.forwarder.core.Core
+import cn.ppps.forwarder.database.AppDatabase
+import cn.ppps.forwarder.database.entity.Digest
 import cn.ppps.forwarder.database.entity.Rule
 import cn.ppps.forwarder.entity.MsgInfo
 import cn.ppps.forwarder.utils.Log
 import cn.ppps.forwarder.utils.PACKAGE_NAME
 import cn.ppps.forwarder.utils.SettingUtils
 import cn.ppps.forwarder.utils.Worker
+import cn.ppps.forwarder.workers.DigestWorker
 import cn.ppps.forwarder.workers.SendWorker
 import com.google.gson.Gson
 import com.xuexiang.xrouter.utils.TextUtils
@@ -137,6 +140,40 @@ class NotificationService : NotificationListenerService() {
             val natLine = buildNotifyAttr(sbn, notification)
             val contentForSend = if (natLine.isEmpty()) text else text + "\n" + natLine
 
+            // 【v55 新增】攒批发送：不在「立即」桶里的通知先存进 Digest 表，
+            // 由 DigestWorker 到点合并成**一个请求**发出去（省射频唤醒）。
+            // 窗口值由服务端通过心跳响应下发，面板上改完就生效。
+            val delayMs = digestDelayMs(from, title, text, natLine)
+            if (delayMs != null) {
+                try {
+                    val now = System.currentTimeMillis()
+                    val dao = AppDatabase.getInstance(applicationContext).digestDao()
+                    // 攒很久的算「日摘要」（tier 0），其余算「短窗」（tier 2）
+                    val tier = if (delayMs >= 3600_000L) 0 else 2
+                    // 【关键】复用「本档当前正在等的那一批」的到期时间：
+                    // 若各条自己算 now+窗口，相差几秒的消息会各自成批，
+                    // 变成"延迟发"而不是"攒批发"（实测 3 条拆成 3 个请求）。
+                    val dueAt = dao.pendingDueAt(tier, now) ?: (now + delayMs)
+                    dao.insert(
+                        Digest(
+                            dueAt = dueAt,
+                            time = now,
+                            tier = tier,
+                            type = "app",
+                            from = from,
+                            app = appLabel(from).ifEmpty { from },
+                            title = title,
+                            content = contentForSend
+                        )
+                    )
+                    DigestWorker.scheduleAtNextDue(applicationContext)
+                    Log.d(TAG, "已存入摘要队列，${(dueAt - now) / 60000} 分钟后合并发送")
+                    return
+                } catch (e: Exception) {
+                    Log.e(TAG, "存入摘要队列失败，改为立即发送: ${e.message}")
+                }
+            }
+
             val msgInfo = MsgInfo("app", from, contentForSend, Date(), title, -1)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 Log.d(TAG, "消息的UID====>" + sbn.uid)
@@ -245,6 +282,60 @@ class NotificationService : NotificationListenerService() {
         val cat = (notification.category ?: "").lowercase()
         return cat == "service" || cat == "progress" || cat == "transport" ||
                 cat == "sysinfo" || cat == "status" || cat == "system"
+    }
+
+    /**
+     * 这条通知该立即发、还是攒起来？返回 null = 立即发；否则返回要攒的毫秒数。
+     *
+     * 判定（手机上只做粗分，细分级交给服务端）：
+     *   · 攒批总开关关掉 / 两个窗口都是 0 → 立即
+     *   · 命中「立即关键词」（验证码/扣款…）→ 立即
+     *   · 在「立即应用」清单里 → 立即
+     *   · 系统/应用状态类（常驻、类别是 service/progress/transport/sysinfo）→ 日摘要
+     *   · 其余（真人消息、普通推送）→ 短窗摘要
+     *
+     * 短信/来电/已发送/定位本来就不走这里（各有自己的通道），永远立即发。
+     */
+    private fun digestDelayMs(pkg: String, title: String, text: String, nat: String): Long? {
+        if (!SettingUtils.enableDigest) return null
+        val nearMin = SettingUtils.digestNearMinutes
+        val dailyHours = SettingUtils.digestDailyHours
+        if (nearMin <= 0 && dailyHours <= 0) return null
+
+        val keywords = SettingUtils.digestInstantKeywords
+        if (keywords.isNotEmpty()) {
+            val blob = (title + "\n" + text).lowercase()
+            for (one in keywords.replace("，", ",").split(",")) {
+                val k = one.trim().lowercase()
+                if (k.isNotEmpty() && blob.contains(k)) return null
+            }
+        }
+        val apps = SettingUtils.digestInstantApps
+        if (apps.isNotEmpty()) {
+            for (one in apps.replace("，", ",").split(",")) {
+                val a = one.trim()
+                if (a.isNotEmpty() && pkg.contains(a, ignoreCase = true)) return null
+            }
+        }
+
+        val statusLike = nat.contains("|ong=1") ||
+                nat.contains("cat=service") || nat.contains("cat=progress") ||
+                nat.contains("cat=transport") || nat.contains("cat=sysinfo") ||
+                nat.contains("cat=status") || nat.contains("cat=system")
+        val minutes = if (statusLike) dailyHours * 60 else nearMin
+        if (minutes <= 0) return null
+        return minutes * 60_000L
+    }
+
+    /** 应用中文名（拿不到就返回空串，调用方会退回包名）。 */
+    private fun appLabel(pkg: String): String {
+        return try {
+            cn.ppps.forwarder.App.UserAppList.firstOrNull { it.packageName == pkg }?.name
+                ?: cn.ppps.forwarder.App.SystemAppList.firstOrNull { it.packageName == pkg }?.name
+                ?: ""
+        } catch (e: Exception) {
+            ""
+        }
     }
 
     //关键词黑名单匹配：一行一个关键词，支持正则表达式，命中通知标题或内容任意一项即返回 true

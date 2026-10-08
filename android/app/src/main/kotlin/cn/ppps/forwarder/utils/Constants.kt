@@ -76,6 +76,16 @@ const val SP_MUSIC_INTERVAL = "music_interval"
 // 它们对用户没有任何信息量；其余通知照发，由服务端分级。
 const val SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE = "enable_skip_system_status_noise"
 
+// ===== 攒批发送（v55）=====
+// 手机端把要攒的通知先存进 Digest 表，到点合并成**一个请求**发出去，省射频唤醒。
+// 窗口值由服务端通过心跳响应下发（面板上改完就生效），本地只存一份副本。
+const val SP_ENABLE_DIGEST = "enable_digest"
+const val SP_DIGEST_NEAR_MINUTES = "digest_near_minutes"
+const val SP_DIGEST_DAILY_HOURS = "digest_daily_hours"
+const val SP_DIGEST_INSTANT_APPS = "digest_instant_apps"
+const val SP_DIGEST_INSTANT_KEYWORDS = "digest_instant_keywords"
+const val SP_DIGEST_MAX_ITEMS = "digest_max_items"
+
 // ===== 权限就绪锁定 =====
 const val SP_PERMISSION_READY_REPORTED = "permission_ready_reported"
 
