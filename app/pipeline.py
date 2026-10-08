@@ -16,7 +16,7 @@ from .classify import configure as configure_priority, classify as classify_tier
 from .dedup import Dedup
 from .devices import DeviceRegistry
 from .merge import Merger
-from .models import Incoming
+from .models import Incoming, parse_time_text
 
 log = logging.getLogger("smsf-hub.pipeline")
 
@@ -159,18 +159,38 @@ def _tier_of(rec: dict) -> tuple[int, str]:
     return classify_tier(tmp)
 
 
+def _recv_ms(rec: dict) -> int:
+    """从正文里抠出手机端渲染的 receive_time（真正的「收到时刻」）。"""
+    for ln in (rec.get("content") or "").splitlines():
+        s = ln.strip()
+        if len(s) == 19 and s[4] == "-" and s[13] == ":":
+            ms = parse_time_text(s)
+            if ms:
+                return ms
+    return 0
+
+
 def fix_record(rec: dict) -> dict:
     """对历史记录做同样的纠正，供面板展示时使用（不改动磁盘上的原始数据）。
 
-    做两件事：
+    做三件事：
       1. 纠正手机端「通知被当成短信上报」的老格式（见 classify_notify）
       2. 给 2026-10-07 之前落盘、没有 tier 字段的老记录补算分级
+      3. **把显示时间改回「收到时刻」** —— 老记录落盘时用的是「上报时刻」，
+         而手机离线补发时上报会晚好几小时，于是面板上会出现
+         「11 点收到的消息 14 点才弹出来」。正文里的 receive_time 才是准的。
     """
     mtype, sender, app = classify_notify(rec.get("type", ""), rec.get("sender", ""), rec.get("content", ""))
     changed = (mtype != rec.get("type")) or (sender != rec.get("sender")) or bool(app)
     need_tier = rec.get("tier") in (None, "", -1, "-1")
-    if not changed and not need_tier:
+
+    recv_ms = _recv_ms(rec)
+    shown_ms = parse_time_text(rec.get("time", "")) if recv_ms else 0
+    need_time = bool(recv_ms and shown_ms and abs(shown_ms - recv_ms) > 120_000)
+
+    if not (changed or need_tier or need_time):
         return rec
+
     out = dict(rec)
     if changed:
         out["type"] = mtype
@@ -181,6 +201,10 @@ def fix_record(rec: dict) -> dict:
         tier, reason = _tier_of(out)
         out["tier"] = tier
         out["tier_reason"] = reason
+    if need_time:
+        out["upload_time"] = rec.get("time")
+        out["delay_sec"] = int((shown_ms - recv_ms) / 1000)
+        out["time"] = datetime.fromtimestamp(recv_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
     return out
 
 
@@ -325,6 +349,13 @@ class Pipeline:
                 sub["content"] = str(it.get("c") or "")
                 if it.get("ts"):
                     sub["ts"] = str(it["ts"])
+                    # 摘要包里每条都有自己的「收到时刻」，必须一并带上 ——
+                    # 否则会被当成"整包发送的时刻"，时间又错回去了。
+                    try:
+                        sub["receive_time"] = datetime.fromtimestamp(
+                            int(it["ts"]) / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                    except (TypeError, ValueError, OSError):
+                        pass
                 try:
                     await self.handle(sub, source_ip)
                     done += 1
@@ -368,6 +399,14 @@ class Pipeline:
             "tier": msg.tier,
             "tier_reason": msg.tier_reason,
         }
+        # 上报延迟：收到 → 送达差了多少秒。超过 2 分钟才记，
+        # 面板上会标出来 —— 手机端积压（夜间被系统限制后台）时一眼能看出来。
+        try:
+            delay = int((datetime.now() - msg.when).total_seconds())
+        except (TypeError, ValueError, OSError):
+            delay = 0
+        if delay > 120:
+            record["delay_sec"] = delay
         self.recent.appendleft(record)
         self._append_recent(record)
 

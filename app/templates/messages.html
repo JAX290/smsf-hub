@@ -13,6 +13,8 @@
           font-weight:700; font-family:ui-monospace,Consolas,monospace; }
   .stat { color:var(--dim); font-size:13px; }
   .stat b { color:var(--fg); }
+  .delay { display:inline-block; margin-left:6px; padding:1px 6px; border-radius:8px; font-size:11px;
+           background:#fff7ed; color:#c2410c; border:1px solid #fed7aa; }
 </style>
 
 <div class="card">
@@ -78,7 +80,14 @@
       <td style="white-space:nowrap" {% if r.tier_reason %}title="{{ r.tier_reason }}"{% endif %}>
         <span class="tier {{ r.tier_css }}">{{ r.tier_label }}</span>
       </td>
-      <td style="white-space:nowrap">{{ r.time }}</td>
+      <td style="white-space:nowrap">{{ r.time }}
+        {%- set d = r.delay_sec or 0 %}
+        {%- if d >= 120 %}
+        <span class="delay" title="手机端延迟上报：{{
+          (d // 60) }} 分钟才送达{% if r.upload_time %}（实际送达时刻 {{ r.upload_time }}）{% endif %}">
+          +{{ '%.1fh'|format(d / 3600) if d >= 3600 else '%dm'|format(d // 60) }}</span>
+        {%- endif %}
+      </td>
       <td style="white-space:nowrap">{{ {'sms':'短信','call':'来电','notify':'通知','sent':'已发送','location':'定位'}.get(r.type, r.type) }}</td>
       <td>{{ r.sender or '-' }}</td>
       <td>{{ r.app_display or '-' }}</td>

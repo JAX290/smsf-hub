@@ -261,6 +261,22 @@ def anomalies(rows: list, days: int = 3, device_status=None,
                 "detail": "短时间大量验证码通常是被人拿你的号试探注册/登录，建议核对",
             })
 
+    # --- 手机端上报积压（收到 → 送达 延迟过大）---
+    # 常见原因是系统限制了 App 的后台（省电策略 / 自启动没开），
+    # 消息攒在手机里发不出来，早上才集中补发 —— 表现为「11 点收到的 14 点才弹」。
+    delayed = [r for r in rows if int(r.get("delay_sec") or 0) >= 900]
+    if len(delayed) >= 10:
+        by_dev = collections.Counter((r.get("device") or "?") for r in delayed)
+        worst = max(int(r.get("delay_sec") or 0) for r in delayed)
+        out.append({
+            "level": "warn",
+            "title": f"手机端上报积压：{len(delayed)} 条延迟超过 15 分钟",
+            "detail": "按设备 " + "、".join(f"{k} {v} 条" for k, v in by_dev.most_common()) +
+                      f"；最长延迟 {worst / 3600:.1f} 小时。"
+                      "多半是系统限制了 App 后台（省电策略改成「无限制」、打开自启动、"
+                      "加入电池优化白名单），消息攒在手机里发不出来",
+        })
+
     # --- 噪音占比过高 ---
     if rows:
         recent = rows[: min(300, len(rows))]

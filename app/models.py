@@ -126,6 +126,67 @@ class Incoming:
             device=pick("device", "device_mark"),
             app_version=pick("app_version", "version"),
             sim=pick("sim", "card_slot", "title"),
-            ts=int(pick("ts", "timestamp", default="0") or 0),
+            ts=resolve_ts(payload),
             raw=payload,
         )
+
+
+# ------------------------------------------------------------------------------
+#  消息时间到底取哪一个？
+# ------------------------------------------------------------------------------
+#  手机上报的负载里有两个时间，含义完全不同：
+#
+#    receive_time —— 通知/短信**被手机收到**的时刻（模板里由 msgInfo.date 渲染）
+#    ts           —— **这次发送**的时刻（模板里是 [timestamp]，同时也用于签名）
+#
+#  离线补发、攒批重发时，ts 会变成"补发那一刻"，而 receive_time 仍然是原始收到时间。
+#  以前面板用的是 ts，于是出现「11 点收到的消息 14 点才弹出来」这种怪现象
+#  （实测某台手机 46% 的消息晚了 6 小时以上，全是夜间积压后补发的）。
+#
+#  所以：**面板/归档一律用 receive_time**；ts 只负责签名与防重放
+#  （那一步在 main.py 里用原始 payload 做，和这里无关）。
+# ------------------------------------------------------------------------------
+
+_TS_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
+
+
+def parse_time_text(text: str) -> int:
+    """把 '2026-10-08 11:02:37' 这类文本解析成毫秒时间戳；解析不了返回 0。"""
+    s = (text or "").strip()
+    if not s:
+        return 0
+    s = s[:19]
+    for fmt in _TS_FORMATS:
+        try:
+            return int(datetime.strptime(s, fmt).timestamp() * 1000)
+        except ValueError:
+            continue
+    return 0
+
+
+def resolve_ts(payload: dict) -> int:
+    """决定这条消息的时间：优先 receive_time，退回 ts。"""
+    def pick(*keys, default=""):
+        for k in keys:
+            v = payload.get(k)
+            if v not in (None, ""):
+                return str(v)
+        return default
+
+    recv_ms = parse_time_text(pick("receive_time", "recv_time"))
+    raw_ts = pick("ts", "timestamp", default="0")
+    try:
+        ts_ms = int(raw_ts or 0)
+    except (TypeError, ValueError):
+        ts_ms = 0
+    if ts_ms and ts_ms < 10_000_000_000:      # 手机若发了秒级，补齐成毫秒
+        ts_ms *= 1000
+
+    # 合理性检查：手机时钟可能不准。收到时间若跑到未来（超过 10 分钟）
+    # 或早于 30 天前，就认为这个字段不可信，退回 ts。
+    if recv_ms:
+        now_ms = int(datetime.now().timestamp() * 1000)
+        drift = recv_ms - now_ms            # 正数 = 比服务器时间靠后
+        if drift <= 600_000 and recv_ms >= now_ms - 30 * 24 * 3600 * 1000:
+            return recv_ms
+    return ts_ms
