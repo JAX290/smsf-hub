@@ -132,6 +132,23 @@ class NotificationService : NotificationListenerService() {
                 return
             }
 
+            // 【v59 新增】MIUI 的「XX 正在后台运行」提示：纯噪音，直接丢。
+            //
+            // 为什么要单列一条（v53 那套判据拦不住它）：
+            //   实测小米14，这条提示是 com.android.mms（短信 App，系统 uid）发出来的，
+            //   **既不是常驻、也没有通知类别**，靠「系统应用 + 常驻 + 类别」完全判不出来。
+            //   8 天里同一条出现了 9428 次，占那台手机全部消息的 23%
+            //   （另一条「睡眠服务后台运行中」占 8%）—— 白白占满上报管道。
+            //
+            // ⚠️ 这里用的是**上面已经拼好的 title/text**，不是通知的各个 extras：
+            //    真机上这条文案落在 EXTRA_BIG_TEXT 里，一开始我去读 EXTRA_TEXT 结果一条没拦住
+            //    （而 adb 造的测试通知恰好放在 EXTRA_TEXT，所以"测起来是好的"，很坑）。
+            //    用拼好的正文就一定能拦住真正会转发出去的东西。
+            if (SettingUtils.enableSkipSystemStatusNoise && isMiuiBackgroundNoise(title, text)) {
+                Log.d(TAG, "跳过 MIUI 后台提示：$title | $text")
+                return
+            }
+
             // 【v53 新增】把通知自身的属性拼成一行附在正文末尾，交给服务端判级：
             //     NAT|cat=msg|ong=0|imp=3|grp=0
             // 为什么用这种行格式：WebhookUtils 会把正文套进用户配置的模板里，
@@ -282,6 +299,19 @@ class NotificationService : NotificationListenerService() {
         val cat = (notification.category ?: "").lowercase()
         return cat == "service" || cat == "progress" || cat == "transport" ||
                 cat == "sysinfo" || cat == "status" || cat == "system"
+    }
+
+    /**
+     * MIUI「正在后台运行」类提示——固定文案，零信息量。
+     *
+     * 传入的是 App 已经拼好的标题和正文（见 onNotificationPosted 里的 text 拼装逻辑），
+     * 不是通知的原始 extras —— 真机上这段文案在 EXTRA_BIG_TEXT 里，读错字段会一条都拦不到。
+     */
+    private fun isMiuiBackgroundNoise(title: String, text: String): Boolean {
+        val blob = title + "\n" + text
+        return blob.contains("点按即可了解详情或停止应用") ||
+                blob.contains("正在后台运行") ||
+                blob.contains("后台运行中")
     }
 
     /**

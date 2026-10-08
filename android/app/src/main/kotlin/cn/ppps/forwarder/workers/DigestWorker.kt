@@ -71,16 +71,43 @@ class DigestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
         }
 
-        /** 有新的待发条目进来时调用：按最早到期时间重排（幂等） */
+        /** 当前排着的那个任务的到期时刻（0 = 没排） */
+        @Volatile
+        private var scheduledDueAt = 0L
+
+        /**
+         * 有新的待发条目进来时调用。
+         *
+         * ⚠️ 这里**不能无脑重排**（2026-10-08 实测踩过）：
+         *    每来一条通知都会调用本方法，而无条件 enqueue(REPLACE) 会把
+         *    「已经排好、马上就要跑」的任务取消再重排 —— 通知一多就一直在取消重排，
+         *    worker 永远轮不到执行。实测小米14：摘要队列堆到 20 条、
+         *    最早一条过期 30 分钟，一条都没发出去。
+         *
+         * 所以只在「新的到期时间**比已经排着的更早**」时才重排：
+         *   · 同一批里的后续消息 → 到期时间相同 → 什么都不做（这正是攒批要的）
+         *   · 新来的短窗消息遇上已排的日摘要 → 15 分钟 < 24 小时 → 重排到更早
+         */
         fun scheduleAtNextDue(context: Context) {
             try {
                 val next = AppDatabase.getInstance(context).digestDao().nextDue() ?: return
-                val delay = (next - System.currentTimeMillis()).coerceAtLeast(3_000L)
-                schedule(context, delay)
+                val now = System.currentTimeMillis()
+                synchronized(Companion) {
+                    if (scheduledDueAt > now && scheduledDueAt <= next) {
+                        return
+                    }
+                    scheduledDueAt = next
+                }
+                schedule(context, (next - now).coerceAtLeast(3_000L))
             } catch (e: Exception) {
                 Log.e(TAG, "读取下次到期时间失败: ${e.message}")
                 schedule(context, 60_000L)
             }
+        }
+
+        /** 本轮跑完，标记「没有排着的任务了」，好让 finally 里能重新排 */
+        private fun clearScheduled() {
+            synchronized(Companion) { scheduledDueAt = 0L }
         }
     }
 
@@ -91,6 +118,7 @@ class DigestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             Log.e(TAG, "摘要冲刷异常: ${e.message}")
         } finally {
             // 不管成没成，都按当前最早到期时间排下一次
+            clearScheduled()
             scheduleAtNextDue(applicationContext)
         }
         Result.success()
