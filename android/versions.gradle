@@ -2,7 +2,7 @@ import java.util.regex.Matcher
 import java.util.regex.Pattern
 
 def build_versions = [:]
-build_versions.version_code = 74
+build_versions.version_code = 75
 build_versions.version_name = "3.5.0"
 build_versions.min_sdk = 19
 build_versions.target_sdk = 33

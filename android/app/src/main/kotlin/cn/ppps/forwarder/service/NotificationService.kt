@@ -2,9 +2,9 @@ package cn.ppps.forwarder.service
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationManager
 import android.content.ComponentName
 import android.os.Build
+import android.os.UserHandle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.work.OneTimeWorkRequestBuilder
@@ -195,7 +195,7 @@ class NotificationService : NotificationListenerService() {
                 sb.append("|ong=").append(if (sbn.isOngoing) 1 else 0)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val imp = channelImportance(notification.channelId)
+                val imp = channelImportance(sbn)
                 if (imp >= 0) {
                     sb.append("|imp=").append(imp)
                 }
@@ -210,11 +210,18 @@ class NotificationService : NotificationListenerService() {
     }
 
     /** 取通知渠道的重要度（0=关闭 1=低 2=默认 3=高 4=紧急），拿不到返回 -1。 */
-    private fun channelImportance(channelId: String?): Int {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || channelId.isNullOrEmpty()) return -1
+    private fun channelImportance(sbn: StatusBarNotification): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return -1
+        val chId = sbn.notification.channelId ?: return -1
+        if (chId.isEmpty()) return -1
         return try {
-            val nm = getSystemService(NotificationManager::class.java)
-            nm?.getNotificationChannel(channelId)?.importance ?: -1
+            // 必须走 NotificationListenerService 的接口：NotificationManager
+            // 只能看到「本应用自己」的通知渠道，查别的应用会返回 null。
+            // 注意签名是 getNotificationChannels(pkg, UserHandle)，不是 (pkg, int uid)
+            // —— 编译踩过两次，这里记一笔。
+            val user = UserHandle.getUserHandleForUid(sbn.uid)
+            getNotificationChannels(sbn.packageName, user)
+                ?.firstOrNull { it.id == chId }?.importance ?: -1
         } catch (e: Exception) {
             -1
         }
