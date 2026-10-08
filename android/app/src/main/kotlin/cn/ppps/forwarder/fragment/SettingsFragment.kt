@@ -11,6 +11,7 @@ import android.location.Criteria
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextUtils
@@ -1567,7 +1568,28 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
                 PermissionLists.getAccessCoarseLocationPermission(),
                 PermissionLists.getAccessBackgroundLocationPermission()
             ))
-            smsOk && callOk && notifyOk && locOk
+            // 【v58 新增】功能7：忽略电池优化（Doze 白名单）
+            //
+            // 为什么必须算进「就绪」——用户 2026-10-08 的质疑点破的正是这里：
+            //   以前绿勾只查上面四类权限，**不查电池优化**，所以绿勾亮着
+            //   也不代表后台放行。实测那台没加白名单的 Xiaomi14：
+            //   夜里进深度休眠后网络被系统切断，01:00-08:00 整整 7 小时
+            //   一次心跳、一条消息都发不出去，全攒在本地；早上补发又追不上
+            //   新消息，导致白天也延迟数小时（当天 46% 的消息晚了 6 小时以上）。
+            //   而加过白名单的红米整夜心跳正常（每 10 分钟一次）。
+            // 所以把它并进来：没放行就不给绿勾，直接停在设置页让用户打开「功能7」。
+            val batteryOk = try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) true
+                else {
+                    val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    // 拿不到就放行：宁可多显示设置，也不要把用户锁在外面
+                    pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: true
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "检查电池优化白名单时出错: ${e.message}")
+                true
+            }
+            smsOk && callOk && notifyOk && locOk && batteryOk
         } catch (e: Exception) {
             // 任何一项判断出错都当作「没就绪」—— 宁可多显示设置，也不要把用户锁在外面
             Log.e(TAG, "检查必要权限时出错: ${e.message}")

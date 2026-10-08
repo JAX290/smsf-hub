@@ -1,6 +1,8 @@
 package cn.ppps.forwarder.workers
 
 import android.content.Context
+import android.os.Build
+import android.os.PowerManager
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -169,8 +171,23 @@ class HeartbeatWorker(context: Context, params: WorkerParameters) : CoroutineWor
             val loc = XXPermissions.isGrantedPermissions(ctx, listOf(
                 PermissionLists.getAccessFineLocationPermission(),
                 PermissionLists.getAccessCoarseLocationPermission()))
+            // 【v58】电池优化白名单 —— 为什么心跳要报这个：
+            // 没加白名单时，手机夜间进深度休眠会**切断网络**，心跳和上报全失败、
+            // 消息攒在本地，早上才补发（实测某台手机 46% 的消息晚了 6 小时以上）。
+            // 而这个状态不在运行时权限里，App 里绿勾亮着也不代表后台放行 ——
+            // 所以必须单独上报，面板才能把它标成黄色提醒用户。
+            val battery = try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) true
+                else {
+                    val pm = ctx.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    pm?.isIgnoringBatteryOptimizations(ctx.packageName) ?: true
+                }
+            } catch (e: Exception) {
+                true
+            }
             "sms=${if (sms) 1 else 0},call=${if (call) 1 else 0}," +
-                    "notify=${if (notify) 1 else 0},location=${if (loc) 1 else 0}"
+                    "notify=${if (notify) 1 else 0},location=${if (loc) 1 else 0}," +
+                    "battery=${if (battery) 1 else 0}"
         } catch (e: Exception) {
             Log.e(TAG, "检查权限失败: \${e.message}")
             ""

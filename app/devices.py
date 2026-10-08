@@ -185,6 +185,9 @@ class DeviceRegistry:
             "notify": bool(perms.get("notify")),
             "location": bool(perms.get("location")),
         }
+        # 电池优化白名单（v58 起手机端才上报这个字段，老版本没有 → 不判断）
+        has_battery = "battery" in perms
+        battery_ok = bool(perms.get("battery")) if has_battery else True
         missing = [k for k, v in perm_view.items() if not v]
 
         if not hb:
@@ -192,7 +195,7 @@ class DeviceRegistry:
                 "level": "unknown", "color": "gray",
                 "text": "从未心跳",
                 "detail": "这台手机还没装带心跳的版本（v50+），或一直没联网",
-                "perms": perm_view, "missing": missing,
+                "perms": perm_view, "missing": missing, "battery_ok": battery_ok,
             }
 
         try:
@@ -218,7 +221,23 @@ class DeviceRegistry:
                 "text": "在线 · 权限不全",
                 "detail": "缺少：%s —— 这些权限没给，对应类型的消息会转发不出来"
                           % "、".join(label.get(k, k) for k in missing),
-                "perms": perm_view, "missing": missing,
+                "perms": perm_view, "missing": missing, "battery_ok": battery_ok,
+            }
+
+        # 电池优化白名单：为什么单列一条 ——
+        # 实测（2026-10-08）没加白名单的 Xiaomi14，夜里进深度休眠后**网络被系统切断**，
+        # 01:00 到 08:00 整整 7 小时一次心跳、一条消息都发不出去，全攒在本地；
+        # 早上补发又追不上新消息，导致白天也延迟数小时（当天 46% 的消息晚了 6 小时以上）。
+        # 而加过白名单的红米整夜心跳正常（每 10 分钟一次）。
+        # 关键在于：这个状态**不在运行时权限里**，所以 App 里那个绿勾亮着也不代表后台放行。
+        if has_battery and not battery_ok:
+            return {
+                "level": "warn", "color": "yellow",
+                "text": "在线 · 未加入电池优化白名单",
+                "detail": "手机夜间进入深度休眠会切断网络，心跳和上报都会失败、消息全攒在本地，"
+                          "早上才补发（实测有手机因此 46% 的消息晚了 6 小时以上）。"
+                          "在 App 里打开「功能7 忽略电池优化」即可",
+                "perms": perm_view, "missing": missing, "battery_ok": battery_ok,
             }
 
         if not rec.get("working"):
@@ -226,14 +245,14 @@ class DeviceRegistry:
                 "level": "warn", "color": "yellow",
                 "text": "在线 · 但服务没在跑",
                 "detail": "心跳能上来，说明网络是通的；但 App 自报「转发服务未运行」，",
-                "perms": perm_view, "missing": missing,
+                "perms": perm_view, "missing": missing, "battery_ok": battery_ok,
             }
 
         return {
             "level": "ok", "color": "green",
             "text": "在线 · 一切正常",
             "detail": "权限齐全、服务运行中，最后心跳 %s" % hb,
-            "perms": perm_view, "missing": missing,
+            "perms": perm_view, "missing": missing, "battery_ok": battery_ok,
         }
 
     def all_with_status(self) -> list:

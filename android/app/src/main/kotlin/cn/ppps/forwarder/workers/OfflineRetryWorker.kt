@@ -60,11 +60,25 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
         private const val GAP_MS = 300L
 
         /**
+         * 【v58】多久没回音才算「僵尸记录」。
+         *
+         * forward_status=1 表示已发起、等回音。正常请求几秒就回来了；
+         * 超过这么久还没定论（进程被杀、请求挂死、线程池被压满），就当成待发改去重试。
+         * 留足余量是为了不误伤真正还在传输中的请求 —— 否则会重复发送。
+         */
+        private const val STALE_IN_FLIGHT_MS = 10 * 60 * 1000L
+
+        /**
          * 单次运行最多提交多少条。
          * 积压很多时不能无限跑下去（WorkManager 对单次执行有时限，跑太久会被掐掉），
          * 剩下的交给下一轮（网络恢复 / 15 分钟周期兜底）。
+         *
+         * 【v58 从 200 提到 500】实测小米14 积压了 5370 条（其中 3440 条是以前
+         * 永远不会被重试的僵尸记录）。每条之间留 300ms，500 条约 2.5 分钟，
+         * 仍在 WorkManager 的单次时限内；配合 15 分钟周期 ≈ 2000 条/小时，
+         * 清完这批积压要几小时，之后靠攒批把新消息量压下来就不会再积压。
          */
-        private const val MAX_PER_RUN = 200
+        private const val MAX_PER_RUN = 500
 
         /**
          * 指数退避：第 n 次失败之后，隔多久才允许再试。
@@ -126,7 +140,7 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
             val purged = Core.logs.purgePendingRetry(maxRetry, before)
             if (purged > 0) Log.d(TAG, "清理过期失败记录 $purged 条")
 
-            val queuedTotal = Core.logs.countPendingRetry()
+            val queuedTotal = Core.logs.countPendingRetry(now - STALE_IN_FLIGHT_MS)
             Log.d(TAG, "队列共 $queuedTotal 条待发")
             if (queuedTotal == 0) return@withContext Result.success()
 
@@ -139,7 +153,8 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
             var rounds = 0
             while (submitted < MAX_PER_RUN) {
                 val nowRound = System.currentTimeMillis()
-                val pending = Core.logs.getPendingRetry(maxRetry, nowRound, batchSize)
+                val pending = Core.logs.getPendingRetry(maxRetry, nowRound, batchSize,
+                    nowRound - STALE_IN_FLIGHT_MS)
                 if (pending.isEmpty()) break
                 rounds++
 
@@ -158,7 +173,7 @@ class OfflineRetryWorker(context: Context, params: WorkerParameters) : Coroutine
                 if (pending.size < batchSize) break
             }
 
-            val left = Core.logs.countPendingRetry()
+            val left = Core.logs.countPendingRetry(System.currentTimeMillis() - STALE_IN_FLIGHT_MS)
             Log.d(TAG, "本轮共提交 $submitted 条（$rounds 批），队列还剩 $left 条")
             Result.success()
         } catch (e: Exception) {
