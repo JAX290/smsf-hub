@@ -217,7 +217,7 @@ Msg 也只删「已经没有任何转发记录」的（被 Logs 引用的一律�
 debug/release 都不再初始化。
 
 
-## ⚠️ 七个必须记住的坑
+## ⚠️ 八个必须记住的坑
 
 ### 1. nginx 限流会把上报打成 503（2026-10-08 抓出来的元凶）
 
@@ -414,6 +414,33 @@ adb shell "logcat -b all -d | grep -E '息屏|已注册移动传感器'"   # 应
 # 然后拿着手机走动 15 分钟（息屏放兜里），再看：
 adb shell "logcat -b all -d | grep -E '在移动|自主定位成功'"
 ```
+
+### 8. MIUI 上「忽略电池优化」的标准入口是废的
+
+App 的「功能7 忽略电池优化」原来走 `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+＋ `package:` —— 原生 Android 上会弹「是否允许忽略电池优化」的对话框，一切正常。
+
+**但在 MIUI（实测 12.5，红米/小米14）上，这个 intent 被解析成了
+`com.android.internal.app.ResolverActivity`**，弹出来的是 MIUI 自己的
+**「电量详情」页** —— 那页只有「结束运行 / 卸载 / 应用信息」，**根本没有电池优化开关** ✗。
+用户点「功能7」进来只会一脸问号（2026-10-09 的真实反馈）。
+
+实测三个入口在 MIUI 上分别落到哪：
+
+| intent | MIUI 上实际落在 |
+|---|---|
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`（原来用的）| `ResolverActivity` → MIUI 电量详情页（**无开关** ✗）|
+| `IGNORE_BATTERY_OPTIMIZATION_SETTINGS` | `com.miui.powerkeeper.ui.HiddenAppsContainerManagementActivity` ✓ 省电策略页 |
+| `APPLICATION_DETAILS_SETTINGS` | `com.android.settings.applications.InstalledAppDetails` ✓（应用信息里也有省电策略）|
+
+**v68 的修法**：`KeepAliveUtils.isMiui()` 判断到 MIUI 就不走那个标准入口，
+改成弹一个小对话框让用户二选一（两个都是真能设到「无限制」的页）；
+非 MIUI 保持原样。另外 `onResume` 里刷新「功能7」开关的真实状态 ——
+原来开关状态是 setup 时读一次存着，用户去系统设置改完回来还是旧的 ✗。
+
+> 为什么非要做这个：**「忽略电池优化」不是可选项**。没有它，手机夜间进深度休眠会
+> 切断网络，心跳和上报全失败、消息攒到早上才补发（见第 6 条坑）。
+> 而这个开关**不在运行时权限里**，App 只能引导用户去系统设置点，所以这条引导路径必须是通的。
 
 ### 附：MIUI 其实能看这个 App 的日志
 

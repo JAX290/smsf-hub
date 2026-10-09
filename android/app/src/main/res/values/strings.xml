@@ -1302,4 +1302,10 @@
     <string name="perm_notification">Perm3 Notification access</string>
     <string name="perm_location">Perm4 Location</string>
     <string name="perm_overlay">Perm5 Overlay</string>
+    <!-- 【v68】MIUI 上标准「忽略电池优化」入口是废的（会跳到 MIUI 的电量详情页，
+         那页没有开关），所以给两个真正能设到「无限制」的入口让用户选 -->
+    <string name="battery_miui_title">设置「无限制」后台运行</string>
+    <string name="battery_miui_content">小米/MIUI 把系统的电池优化入口换成了自家的页面，那个页面里没有开关。\n\n请从下面任一入口，把「收音机」的省电策略改成「无限制」：\n\n① 电池优化列表：找到「收音机」→ 省电策略 → 无限制\n② 应用信息 → 省电策略 → 无限制\n\n改完回到本页，开关会自动变绿。</string>
+    <string name="battery_miui_entry_list">① 电池优化列表</string>
+    <string name="battery_miui_entry_appinfo">② 应用信息</string>
 </resources>

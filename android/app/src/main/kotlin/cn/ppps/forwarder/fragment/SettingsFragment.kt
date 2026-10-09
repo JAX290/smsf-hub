@@ -261,9 +261,14 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         initAppSpinner()
         //从系统通知设置页返回时，刷新「功能8」的状态
         refreshNotifySettingSwitch()
+        // 【v68】从「电池优化/省电策略」设置页返回时，刷新「功能7」的状态
+        refreshBatterySwitch()
         //【新增】必要权限全就绪时锁住设置界面，防止误触把权限关掉
         refreshLockState()
     }
+
+    /** 「功能7 忽略电池优化」的开关引用，供 onResume 刷新真实状态用 */
+    private var sbBatterySettingRef: SwitchButton? = null
 
     override fun initListeners() {
         binding!!.btnSilentPeriod.setOnClickListener(this)
@@ -1028,29 +1033,66 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
     //电池优化设置
     @RequiresApi(api = Build.VERSION_CODES.M)
     @SuppressLint("UseSwitchCompatOrMaterialCode", "ObsoleteSdkInt")
-    private fun batterySetting(layoutBatterySetting: LinearLayout, sbBatterySetting: SwitchButton) {
+    private fun batterySetting(layoutBatterySetting: LinearLayout, sb: SwitchButton) {
         //安卓6.0以下没有忽略电池优化
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             layoutBatterySetting.visibility = View.GONE
             return
         }
 
+        sbBatterySettingRef = sb
+
         try {
-            val isIgnoreBatteryOptimization: Boolean = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
-            sbBatterySetting.isChecked = isIgnoreBatteryOptimization
-            sbBatterySetting.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean ->
-                if (isChecked && !isIgnoreBatteryOptimization) {
-                    KeepAliveUtils.ignoreBatteryOptimization(requireActivity())
-                } else if (isChecked) {
-                    XToastUtils.info(R.string.isIgnored)
-                    sbBatterySetting.isChecked = true
-                } else {
+            sb.isChecked = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+            sb.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean ->
+                // 每次都重新读一遍真实状态 —— 原来把状态在 setup 时读一次就存着，
+                // 用户去系统设置里改完回来，开关还是旧的（踩过）
+                val granted = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+                if (!isChecked) {
                     XToastUtils.info(R.string.isIgnored2)
-                    sbBatterySetting.isChecked = isIgnoreBatteryOptimization
+                    sb.isChecked = granted
+                    return@setOnCheckedChangeListener
+                }
+                if (granted) {
+                    XToastUtils.info(R.string.isIgnored)
+                    sb.isChecked = true
+                    return@setOnCheckedChangeListener
+                }
+
+                if (KeepAliveUtils.isMiui()) {
+                    // 【v68】MIUI 上标准入口是废的：实测会被解析到 MIUI 自己的「电量详情」页，
+                    // 那页只有「结束运行/卸载/应用信息」，没有电池优化开关。
+                    // 所以给两个真正能设到「无限制」的入口让用户自己选。
+                    MaterialDialog.Builder(requireContext())
+                        .title(getString(R.string.battery_miui_title))
+                        .content(getString(R.string.battery_miui_content))
+                        .positiveText(getString(R.string.battery_miui_entry_list))
+                        .negativeText(getString(R.string.battery_miui_entry_appinfo))
+                        .cancelable(true)
+                        .onPositive { _: MaterialDialog?, _: DialogAction? ->
+                            KeepAliveUtils.openBatteryOptimizationList(requireActivity())
+                        }
+                        .onNegative { _: MaterialDialog?, _: DialogAction? ->
+                            KeepAliveUtils.openAppInfo(requireActivity())
+                        }
+                        .show()
+                } else {
+                    KeepAliveUtils.ignoreBatteryOptimization(requireActivity())
                 }
             }
         } catch (ex: Exception) {
             ex.printStackTrace()
+        }
+    }
+
+    /** 从系统设置页回来时把「功能7」开关刷成真实状态 */
+    private fun refreshBatterySwitch() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        try {
+            val sb = sbBatterySettingRef ?: return
+            sb.isChecked = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+        } catch (e: Exception) {
+            // 忽略
         }
     }
 
