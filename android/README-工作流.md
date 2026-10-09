@@ -105,6 +105,7 @@
 | v63 | **定位改为「只读系统缓存」**：不再注册 PASSIVE 请求，系统的「正在定位」提示不再常亮（见下方第 7 条坑）|
 | v64 | 位移不足阈值不再调地理编码（省掉每天上千次第三方请求）|
 | v65 | **息屏 + 在移动 → 每 10 分钟自主定位一次**（保精度）；平时仍只读缓存（保隐私）。地理编码复用阈值 100 米 → **10 米** |
+| v66 | 「身体活动」权限改为**App 自己申请**（首次运行问一次 + 挂在定位开关上），不再依赖 adb 预授权 |
 
 ## 手机端到底存了些什么（v61 数据精简）
 
@@ -334,6 +335,15 @@ adb shell "logcat -b all -d | grep onLocationArrived"
 - ⚠️ **前两个在 Android 10+ 需要 `ACTIVITY_RECOGNITION` 权限，没授权时注册上去是静默不工作的**
   （一个事件都不会来，看起来正常其实完全没生效）。所以代码里显式判断这个权限，
   没授权就只用加速度计（不需要任何权限）。清单里也补上了这个权限（有更好，没有也能跑）。
+
+  **这个权限 App 自己会申请（v66），不要只依赖 adb 预授权** —— 用户自己装 APK 时
+  adb 不一定在场。申请放在两处：
+  1. `MainActivity.onCreate` → `askActivityRecognitionOnce()`：**首次运行问一次**，
+     用一个 `sensor_permission_asked` 标记保证不重复打扰；用户拒绝就算了（会退回加速度计）
+  2. 设置页「功能4 定位」开关的权限列表里也带着它 —— 随时能补授
+
+  验证是否问过：`run-as cn.ppps.forwarder cat shared_prefs/cn.ppps.forwarder.xml | grep sensor_permission_asked`
+  （⚠️ 手机锁屏时 `am start` 起不来界面，这条标记不会写 —— 必须先解锁再打开 App）
 - 自主定位用**系统 LocationManager**（`getCurrentLocation` / `requestSingleUpdate`），
   不用第三方地图 SDK —— 少一个数据出口
 - 只在息屏时注册传感器，亮屏立刻注销（省电）

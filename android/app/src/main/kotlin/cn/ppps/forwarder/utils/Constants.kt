@@ -87,6 +87,8 @@ const val SP_ENABLE_ACTIVE_LOCATION_MOVING = "enable_active_location_moving"
 const val SP_LOCATION_ACTIVE_MINUTES = "location_active_minutes"
 // 传感器多久没动静就不再算「在移动」（分钟）
 const val SP_LOCATION_MOTION_WINDOW_MIN = "location_motion_window_min"
+// 「身体活动」权限（传感器用）是否已经问过一次 —— 只能问一次，别反复骚扰
+const val SP_SENSOR_PERMISSION_ASKED = "sensor_permission_asked"
 
 // ===== 数据精简（v61）=====
 // 手机只是「中转站」，永久档案在服务端（归档永不删）。所以手机端只留一个短期缓冲，

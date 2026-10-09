@@ -116,6 +116,10 @@ class SettingUtils private constructor() {
         var locationActiveMinutes: Int by SharedPreference(SP_LOCATION_ACTIVE_MINUTES, 10)
         var locationMotionWindowMin: Int by SharedPreference(SP_LOCATION_MOTION_WINDOW_MIN, 30)
 
+        // 【v66】「身体活动」权限（ACTIVITY_RECOGNITION）是否已经问过一次。
+        // 只问一次：用户拒绝了就不再弹（功能会自动退回加速度计，照样能跑）。
+        var sensorPermissionAsked: Boolean by SharedPreference(SP_SENSOR_PERMISSION_ASKED, false)
+
         // 坐标位移小于这个米数就复用上次解析的地址（少调第三方地理编码）。
         // 默认 10 米 —— 用户要求提高精度（原来是 100 米）。
         var locationGeocodeReuseMeters: Int by SharedPreference(SP_LOCATION_GEOCODE_REUSE_M, 10)

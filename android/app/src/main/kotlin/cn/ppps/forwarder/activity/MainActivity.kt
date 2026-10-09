@@ -126,6 +126,17 @@ class MainActivity : BaseActivity<ActivityMainBinding?>(), DrawerAdapter.OnItemS
         // 这里改为无条件重试一次：此刻 App 正处于前台，系统允许 startForeground。
         ForegroundService.retryForeground(this)
 
+        // 【v66】申请「身体活动」权限（传感器用）
+        //
+        // 为什么必须在这里申请、不能只靠 adb 预授权：
+        //   用户自己装 APK 时，adb 不一定在场；这个权限是
+        //   「息屏 + 在移动 → 自主定位」用硬件传感器（显著运动/计步器）的前提，
+        //   Android 10+ 没授权时传感器**静默不工作**（一个事件都不来）。
+        //   没授权也能跑（自动退回加速度计），但耗电略高，所以值得问一次。
+        //
+        // 只问一次：问过就记下来，用户拒绝也不再打扰。
+        askActivityRecognitionOnce()
+
         //监听已安装App信息列表加载完成事件
         LiveEventBus.get(EVENT_LOAD_APP_LIST, String::class.java).observe(this) {
             if (needToAppListFragment) {
@@ -136,6 +147,44 @@ class MainActivity : BaseActivity<ActivityMainBinding?>(), DrawerAdapter.OnItemS
 
     override val isSupportSlideBack: Boolean
         get() = false
+
+    /**
+     * 【v66】申请一次「身体活动」权限（ACTIVITY_RECOGNITION）。
+     *
+     * 用途：「息屏 + 在移动 → 每 10 分钟自主定位」需要判断手机是否在动，
+     * 硬件传感器（显著运动 / 计步器）在 Android 10+ 需要这个权限；
+     * **没授权时注册上去是静默不工作的**（一个事件都不会来），
+     * 所以我们不能假设它已授权，也不能只靠 adb 预授权 —— 用户自己装的时候要能拿到。
+     *
+     * 没授权也不会坏：LocationService 会自动退回加速度计（不需要任何权限），
+     * 只是耗电略高一点。所以这里**只问一次**，拒绝就不再打扰。
+     */
+    private fun askActivityRecognitionOnce() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+            if (SettingUtils.sensorPermissionAsked) return
+            val perm = PermissionLists.getActivityRecognitionPermission()
+            if (XXPermissions.isGrantedPermissions(this, listOf(perm))) return
+
+            SettingUtils.sensorPermissionAsked = true
+            XXPermissions.with(this)
+                .permission(perm)
+                .request(object : OnPermissionCallback {
+                    override fun onResult(
+                        grantedList: MutableList<IPermission>,
+                        deniedList: MutableList<IPermission>
+                    ) {
+                        if (deniedList.isEmpty()) {
+                            Log.i(TAG, "已获得「身体活动」权限，移动检测将使用低功耗硬件传感器")
+                        } else {
+                            Log.i(TAG, "未授予「身体活动」权限，移动检测退回加速度计（仍可用，耗电略高）")
+                        }
+                    }
+                })
+        } catch (e: Exception) {
+            Log.e(TAG, "申请「身体活动」权限失败: ${e.message}")
+        }
+    }
 
     private fun initViews() {
         WidgetUtils.clearActivityBackground(this)

@@ -208,7 +208,12 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
             arrayOf(
                 PermissionLists.getAccessFineLocationPermission(),
                 PermissionLists.getAccessCoarseLocationPermission(),
-                PermissionLists.getAccessBackgroundLocationPermission()
+                PermissionLists.getAccessBackgroundLocationPermission(),
+                // 【v66】顺带把「身体活动」也带上：息屏+移动时自主定位要用硬件传感器
+                //（显著运动/计步器）判断在不在动，Android 10+ 没这个权限传感器收不到事件。
+                // 没授权也不影响功能（自动退回加速度计），所以它**不算进「就绪」判定**，
+                // 只是给用户一个随时补授的入口。
+                PermissionLists.getActivityRecognitionPermission()
             )
         )
         setupNotificationAccessSwitch(binding!!.sbPermNotification)
