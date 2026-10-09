@@ -33,6 +33,36 @@
    命名 `SmsF_<版本名>_<versionCode>_<abi>_debug.apk`。
    arm64 的 versionCode = 300000 + `versions.gradle` 里的 `version_code`。
 4. 顺手把 arm64 包复制一份到 `dist\` 归档。
+5. **发布到下载地址**（这一步最容易漏，见下一节 —— 2026-10-09 就漏了十几个包 ✗）。
+
+## 📦 发布到下载地址（每轮编译后别忘）
+
+| 地址 | 对应文件 | 给谁用 |
+|---|---|---|
+| `https://notic.mulinsen.win/apk1` | `smsf-arm64.apk` | **arm64（小米14 / 红米都用这个）** |
+| `https://notic.mulinsen.win/apk2` | `smsf-universal.apk` | 通用 |
+| `https://notic.mulinsen.win/apk3` | `smsf-v7a.apk` | 32 位 |
+
+文件放在服务器 `/var/www/smsf-dl-e49cadd1bfb0d24ee8/`（路径随机，
+从 `config.yaml` 的 `panel.apk_download_dir` 读，别写死）。
+
+```
+$env:SMSF_PASS="..."; $env:SMSF_HOST="<服务器>"
+py -3 publish_apk.py     # 取 build 目录里最新一批 → 备份旧的 → 上传 → 逐个核对 md5
+```
+
+**闸门**默认常闭（公网访问一律拒绝），下载前要临时开一下、到期自动关：
+
+- 面板上开（`POST /panel/apk-grant`，需登录），或
+- 直接写状态文件（和面板同一套机制）`/opt/smsf-hub/app/data/apk_gate.json`：
+  ```json
+  {"mode": "minutes", "expires_at": <now+1800>, "granted_at": "..."}
+  ```
+  并确认 `config.yaml` 里 `panel.apk_download_enabled: true`。
+
+> ⚠️ **2026-10-09 的教训**：连着做了 v51→v67 十几个包，**一个都没发布到下载地址** ——
+> 页面上挂的还是 **09-29 的 v49/v50** ✗，用户点进去下到的还是十几天前的旧版。
+> 以后每轮编译完，把「发布」当成流程的最后一步，别只装到连着数据线的那台手机上。
 
 ## 注意
 
@@ -46,7 +76,7 @@
     SFTP 上传 → 服务器端 `py_compile` 自检 → 重启 → 面板页面自检）。
     改服务端代码后跑它即可：
     ```
-    $env:SMSF_PASS="..."; $env:SMSF_HOST="100.118.119.84"
+    $env:SMSF_PASS="..."; $env:SMSF_HOST="<服务器>"
     py -3 push_priority.py
     ```
   - 排查用的服务器脚本都是 `q*.sh`，用

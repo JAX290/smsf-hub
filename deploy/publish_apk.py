@@ -1,81 +1,53 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""一键发布 APK 到 VPS 的下载地址。
-
-用法（在本地 Windows 上执行）：
-    set SMSF_PASS=<VPS密码>
-    python deploy/publish_apk.py            # 只上传
-    python deploy/publish_apk.py --build    # 先编译再上传
-
-做的事：
-    1. （可选）跑 gradle 编译
-    2. 从 build/app/outputs/apk/debug 找最新的 arm64 / v7a / universal 三个包
-    3. 传到 VPS 的下载目录
-    4. 校验：远端文件大小、下载地址 HTTP 状态、下载连接是否真的通
-    5. 更新本地 .apk_hashes.json（.gitignore 已排除）
-
-⚠️ 常见误解：
-    「部署服务端」和「更新 APK」是两件独立的事。
-    换 VPS 时只跑 install.sh，下载地址给到的还是旧版本 —— 必须再跑一次本脚本。
-
-服务器地址怎么给（换 VPS 后只改这一处）：
-    优先读环境变量：  set SMSF_HOST=100.x.y.z
-    或者写进 deploy/.remote_target（这个文件不进仓库）
-下载目录和域名不用你填 —— 连上服务器后自动从 config.yaml 里读。
 """
-import os
-import re
-import sys
-import json
+把最新编译出来的 APK 发布到下载地址。
+
+下载地址（nginx 里用随机路径做保护，闸门开着才能下载）：
+    https://notic.mulinsen.win/apk1   -> smsf-arm64.apk      （arm64，小米14/红米用这个）
+    https://notic.mulinsen.win/apk2   -> smsf-universal.apk  （通用）
+    https://notic.mulinsen.win/apk3   -> smsf-v7a.apk        （32 位）
+
+为什么要专门写这个脚本（而不是手工 scp）：
+    · 下载目录是随机的（/var/www/smsf-dl-<随机串>），路径从服务器配置里读，不写死
+    · 上传前先备份旧的三个包，出问题能立刻回滚
+    · 上传后按 md5 逐个核对，确认服务器上那份和本地编译出来的**完全一致**
+      （之前踩过：文件推上去了但没生效，谁也发现不了）
+
+用法：
+    $env:SMSF_PASS="..."; $env:SMSF_HOST="<服务器>"
+    py -3 publish_apk.py            # 自动找 build 目录里最新的一批
+    py -3 publish_apk.py --dir <包含三个 apk 的目录>
+"""
 import hashlib
-import subprocess
+import os
+import sys
+from datetime import datetime
 from pathlib import Path
+
+# Windows 控制台默认是 GBK，打印 ✅ 之类的字符会直接抛 UnicodeEncodeError
+# （发布脚本因此在校验那步崩过，上传其实已经成功了）—— 这里强制 UTF-8 输出。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 try:
     import paramiko
 except ImportError:
-    print("需要 paramiko：  pip install paramiko")
+    print("缺少 paramiko：py -3 -m pip install paramiko")
     sys.exit(1)
 
-USER = "root"
-APK_SRC = Path(r"C:\AndroidDev\SmsForwarder\build\app\outputs\apk\debug")
-HASH_FILE = Path(__file__).resolve().parent.parent / ".apk_hashes.json"
-TARGET_FILE = Path(__file__).resolve().parent / ".remote_target"
+HOST = os.environ.get("SMSF_HOST", "")          # 必填：从环境变量给（别把地址写进仓库）
+PORT = int(os.environ.get("SMSF_PORT", "22"))
+USER = os.environ.get("SMSF_USER", "root")
+PASS = os.environ.get("SMSF_PASS", "")
 
+# 本地编译产物目录
+BUILD_DIR = Path(r"C:\AndroidDev\SmsForwarder\build\app\outputs\apk\debug")
 
-def resolve_host() -> str:
-    """服务器地址：环境变量优先，其次 deploy/.remote_target（不进仓库）。"""
-    host = (os.environ.get("SMSF_HOST") or "").strip()
-    if host:
-        return host
-    if TARGET_FILE.exists():
-        host = TARGET_FILE.read_text(encoding="utf-8").strip()
-        if host:
-            print("（服务器地址取自 deploy/.remote_target）")
-            return host
-    print("请指定服务器地址，二选一：")
-    print("    set SMSF_HOST=<Tailscale IP 或主机名>")
-    print("    或写进  deploy\\.remote_target")
-    print()
-    print("换 VPS 后只需要改这一处；下载目录和域名会自动从服务器上读。")
-    sys.exit(1)
-
-
-def remote_config(cli) -> dict:
-    """从服务器上的 config.yaml 读需要的几项，省得在本地重复维护。"""
-    _, out, err = cli.exec_command(
-        "cd /opt/smsf-hub && ./venv/bin/python -c "
-        "\"import yaml,json;d=yaml.safe_load(open('config.yaml',encoding='utf-8'));"
-        "print(json.dumps({'dl':(d.get('panel') or {}).get('apk_download_dir',''),"
-        "'url':(d.get('server') or {}).get('phone_base_url','')}))\""
-    )
-    raw = (out.read() + err.read()).decode("utf-8", "replace").strip()
-    try:
-        return json.loads(raw.splitlines()[-1])
-    except Exception:
-        print("  !! 读服务器配置失败，原始输出：%s" % raw[:200])
-        return {"dl": "", "url": ""}
-
-# 架构关键字 -> 远端文件名
+# 目标文件名（nginx 里写死的，不能改）
 TARGETS = [
     ("arm64-v8a", "smsf-arm64.apk"),
     ("armeabi-v7a", "smsf-v7a.apk"),
@@ -83,120 +55,110 @@ TARGETS = [
 ]
 
 
-def build():
-    """跑一次 gradle。用和平时一样的参数。"""
-    print("== 编译 ==")
-    bat = APK_SRC.parents[4] / "gradlew.bat"
-    env = dict(os.environ)
-    env["JAVA_HOME"] = r"C:\AndroidDev\jdk17\jdk-17.0.20.1+1"
-    env["ANDROID_SDK_ROOT"] = r"C:\AndroidDev\sdk"
-    env["GRADLE_USER_HOME"] = r"C:\AndroidDev\gradle-home"
-    env["PATH"] = env["JAVA_HOME"] + r"\bin;" + env.get("PATH", "")
-    r = subprocess.run([str(bat), "assembleDebug", "--console=plain"], cwd=str(bat.parent), env=env)
-    if r.returncode != 0:
-        print("编译失败，终止")
-        sys.exit(1)
-
-
-def pick_latest(pattern: str):
-    """在产物目录里找匹配的最新 apk（按修改时间）。"""
-    cands = [p for p in APK_SRC.glob("*.apk") if pattern in p.name]
-    if not cands:
-        return None
-    return max(cands, key=lambda p: p.stat().st_mtime)
-
-
-def sha256(p: Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
+def md5_of(path: Path) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
 
-def main():
-    if "--build" in sys.argv:
-        build()
+def find_latest(dir_path: Path) -> dict:
+    """在目录里按 ABI 找最新的一批 apk（文件名形如 Radio_v67_..._300088_arm64-v8a_debug.apk）"""
+    out = {}
+    for abi, _ in TARGETS:
+        cands = sorted(dir_path.glob(f"Radio_*_{abi}_*.apk"), key=lambda p: p.stat().st_mtime)
+        if cands:
+            out[abi] = cands[-1]
+    return out
 
-    pw = os.environ.get("SMSF_PASS", "")
-    if not pw:
+
+def main() -> int:
+    if not PASS:
         print("请先设置环境变量 SMSF_PASS")
-        sys.exit(1)
+        return 1
 
-    host = resolve_host()
+    # 1) 找出要发布的文件
+    args = sys.argv[1:]
+    src_dir = Path(args[args.index("--dir") + 1]) if "--dir" in args else BUILD_DIR
+    if not src_dir.is_dir():
+        print(f"找不到目录：{src_dir}")
+        return 1
+    picks = find_latest(src_dir)
+    missing = [abi for abi, _ in TARGETS if abi not in picks]
+    if missing:
+        print(f"❌ 缺少这些 ABI 的包：{missing}（先跑 sync_build.bat）")
+        return 1
+
+    print("=== 1) 本次要发布的包 ===")
+    for abi, name in TARGETS:
+        p = picks[abi]
+        print(f"  {name:<22} <- {p.name}  ({p.stat().st_size/1024/1024:.1f} MB, {md5_of(p)[:12]})")
+
+    # 2) 连服务器，读出下载目录
     cli = paramiko.SSHClient()
     cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    cli.connect(host, username=USER, password=pw, timeout=30)
+    cli.connect(HOST, port=PORT, username=USER, password=PASS,
+                timeout=25, banner_timeout=25, auth_timeout=25,
+                look_for_keys=False, allow_agent=False)
+
+    def run(cmd: str) -> str:
+        _in, out, err = cli.exec_command(cmd, timeout=120)
+        o = out.read().decode("utf-8", "replace")
+        e = err.read().decode("utf-8", "replace")
+        return (o + e).strip()
+
+    dl_dir = run("grep -oP '(?<=apk_download_dir: ).*' /opt/smsf-hub/config.yaml | head -1").strip()
+    if not dl_dir or not dl_dir.startswith("/"):
+        print(f"❌ 读不到 apk_download_dir（拿到的是 {dl_dir!r}）")
+        return 1
+    print(f"\n=== 2) 下载目录：{dl_dir} ===")
+    print("  现有文件：")
+    print("   " + run(f"ls -la --time-style=long-iso {dl_dir}/*.apk 2>/dev/null | awk '{{print $5, $6, $7, $8}}'").replace("\n", "\n   "))
+
+    # 3) 备份
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    bak = f"{dl_dir}/_bak-{ts}"
+    print(f"\n=== 3) 备份到 {bak} ===")
+    print("  " + run(f"mkdir -p {bak} && cp -a {dl_dir}/*.apk {bak}/ 2>/dev/null; ls {bak} | tr '\\n' ' '"))
+
+    # 4) 上传
+    print("\n=== 4) 上传 ===")
     sftp = cli.open_sftp()
+    for abi, name in TARGETS:
+        local = picks[abi]
+        remote = f"{dl_dir}/{name}"
+        sftp.put(str(local), remote)
+        run(f"chmod 644 {remote}")
+        print(f"  {name} 上传完成")
 
-    rc = remote_config(cli)
-    dl_dir = (rc.get("dl") or "").strip()
-    if not dl_dir:
-        print("!! 服务器 config.yaml 里没配 panel.apk_download_dir，无法上传。")
-        print("   在服务器上跑一次 deploy/install.sh，或手工把这一项填上。")
-        sys.exit(1)
-    url = (rc.get("url") or "").strip()
-    m = re.match(r"^[a-zA-Z]+://([^/]+)", url)
-    dl_host = m.group(1) if m else ""
-    print("  服务器      : %s" % host)
-    print("  下载目录    : %s" % dl_dir)
-    print("  下载域名    : %s%s" % (dl_host or "(未配置上报域名)", ""))
-    print()
+    # 5) 核对 md5
+    print("\n=== 5) 逐个核对 md5（本地 vs 服务器）===")
+    all_ok = True
+    for abi, name in TARGETS:
+        local_md5 = md5_of(picks[abi])
+        remote_md5 = run(f"md5sum {dl_dir}/{name} | awk '{{print $1}}'").strip()
+        ok = local_md5 == remote_md5
+        all_ok = all_ok and ok
+        print(f"  {name:<22} {'✅ 一致' if ok else '❌ 不一致'}  {remote_md5[:12]}")
 
-    hashes = {}
-    failed = []
-
-    print("== 上传 ==")
-    for key, remote_name in TARGETS:
-        src = pick_latest(key)
-        if not src:
-            print("  !! 没找到 %s 的包" % key)
-            failed.append(key)
-            continue
-        size = src.stat().st_size
-        print("  %-24s -> %s  (%.1f MB)" % (src.name, remote_name, size / 1024 / 1024))
-        sftp.put(str(src), dl_dir + "/" + remote_name)
-        remote_size = sftp.stat(dl_dir + "/" + remote_name).st_size
-        if remote_size != size:
-            print("     !! 远端大小不符：%d != %d" % (remote_size, size))
-            failed.append(key)
-        hashes[key] = {"file": src.name, "sha256": sha256(src), "size": size}
-
-    print()
-    print("== 校验下载地址 ==")
-    def run(cmd):
-        _, out, err = cli.exec_command(cmd)
-        return (out.read() + err.read()).decode("utf-8", "replace")
-
-    if not dl_host:
-        print("  （未配置上报域名，跳过下载地址校验 —— 在面板【参数设置】里填 server.phone_base_url）")
-    else:
-        for path in ("/apk1", "/apk2", "/apk3"):
-            r = run("curl -s -o /dev/null -w '%%{http_code} %%{size_download}' "
-                    "--max-time 20 --resolve %s:443:127.0.0.1 "
-                    "-r 0-65535 https://%s%s" % (dl_host, dl_host, path))
-            print("  %-6s -> %s" % (path, r.strip()))
-
-    print()
-    print("== 下载闸门 ==")
-    print("  " + run("cat /opt/smsf-hub/app/data/apk_gate.json").strip().replace("\n", " "))
+    # 6) 收尾信息
+    print("\n=== 6) 服务器上的最终状态 ===")
+    print("  " + run(f"ls -la --time-style=long-iso {dl_dir}/*.apk | awk '{{print $5, $6, $7, $8}}'").replace("\n", "\n  "))
+    gate = run("cat /opt/smsf-hub/app/data/apk_gate.json 2>/dev/null")
+    print("\n=== 7) 下载闸门状态 ===")
+    print("  " + gate.replace("\n", "\n  ") if gate else "  （没有闸门文件）")
 
     sftp.close()
     cli.close()
 
-    if hashes:
-        HASH_FILE.write_text(json.dumps(hashes, ensure_ascii=False, indent=2), encoding="utf-8")
-        print()
-        print("已更新 .apk_hashes.json")
-
-    if failed:
-        print()
-        print("!! 以下架构处理失败，请检查：%s" % ", ".join(failed))
-        sys.exit(1)
-
-    print()
-    print("完成。如果闸门是关闭状态，记得在面板首页开一下下载授权。")
+    print("\n=== 8) 下载地址（闸门开着才能下）===")
+    print("  arm64（小米14 / 红米）：https://notic.mulinsen.win/apk1")
+    print("  通用                 ：https://notic.mulinsen.win/apk2")
+    print("  32 位                ：https://notic.mulinsen.win/apk3")
+    print("\n" + ("✅ 发布成功" if all_ok else "❌ 有一致性校验没通过，请复查"))
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
