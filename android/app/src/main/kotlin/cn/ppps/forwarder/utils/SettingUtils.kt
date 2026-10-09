@@ -110,6 +110,16 @@ class SettingUtils private constructor() {
         // 现在改成定时 getLastKnownLocation()，自己不注册请求，提示就不会亮。
         var locationPollSeconds: Int by SharedPreference(SP_LOCATION_POLL_SECONDS, 60)
 
+        // 【v65】息屏 + 在移动 → 每 N 分钟自主定位一次（保精度）；平时只读缓存（保隐私）。
+        // 移动检测用硬件传感器（显著运动 / 计步器 / 加速度计），几乎不耗电。
+        var enableActiveLocationWhenMoving: Boolean by SharedPreference(SP_ENABLE_ACTIVE_LOCATION_MOVING, true)
+        var locationActiveMinutes: Int by SharedPreference(SP_LOCATION_ACTIVE_MINUTES, 10)
+        var locationMotionWindowMin: Int by SharedPreference(SP_LOCATION_MOTION_WINDOW_MIN, 30)
+
+        // 坐标位移小于这个米数就复用上次解析的地址（少调第三方地理编码）。
+        // 默认 10 米 —— 用户要求提高精度（原来是 100 米）。
+        var locationGeocodeReuseMeters: Int by SharedPreference(SP_LOCATION_GEOCODE_REUSE_M, 10)
+
         // ===== 【v61】数据精简 =====
         // 定位：手机端只是「中转缓冲」，永久档案在服务端（归档永不删）。
         // 所以这里只管**已经成功发出去**的记录，保留几天就裁掉；

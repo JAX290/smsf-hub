@@ -6,9 +6,17 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationManager
+import android.os.Build
+import android.os.CancellationSignal
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -35,7 +43,10 @@ import com.king.location.LocationErrorCode
 import com.king.location.OnExceptionListener
 import com.king.location.OnLocationListener
 import com.xuexiang.xaop.util.PermissionUtils
+import androidx.core.content.ContextCompat
 import java.util.Date
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 @SuppressLint("SimpleDateFormat")
 @Suppress("PrivatePropertyName", "DEPRECATION")
@@ -49,6 +60,91 @@ class LocationService : Service() {
             }
         }
     }
+
+    // ==================================================================================
+    //  【v65】息屏 + 在移动 时才「自主定位」一次
+    //
+    //  需求（用户原话）：息屏状态下，若传感器检测到移动（代表手机在移动），
+    //  每 10 分钟自主请求一次定位 —— 既保证精度，又保证隐私。
+    //
+    //  设计：
+    //    · 平时（亮屏 / 静止）：**不注册任何定位请求**，只读系统缓存
+    //      → 系统不会亮「正在使用定位」，也不耗 GPS
+    //    · 息屏 + 检测到移动：每 `locationActiveMinutes`（默认 10）分钟主动取一次定位，
+    //      拿到的是**当前真实位置**，不是可能过期的缓存 → 精度有保障
+    //    · 息屏 + 没动：仍然只读缓存（放在桌上不动，位置也不会变）
+    //
+    //  移动检测优先用硬件级低功耗传感器：
+    //    ① TYPE_SIGNIFICANT_MOTION（显著运动）—— 几乎不耗电，触发一次后要重新注册
+    //    ② TYPE_STEP_COUNTER（计步器）—— 也很省电，步数涨了就是在走
+    //    ③ TYPE_ACCELEROMETER（加速度计）—— 兜底，采样率放到最低档
+    // ==================================================================================
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    Log.i(TAG, "息屏：开始监听移动传感器")
+                    startMotionWatch()
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    Log.i(TAG, "亮屏：停止监听移动传感器")
+                    stopMotionWatch()
+                }
+            }
+        }
+    }
+
+    private var sensorManager: SensorManager? = null
+    private var motionSensor: Sensor? = null
+    private var stepSensor: Sensor? = null
+    private var accelSensor: Sensor? = null
+    private var lastStepCount = -1f
+
+    /** 最近一次「检测到在动」的时刻；0 = 还没动过 */
+    @Volatile
+    private var lastMotionAt = 0L
+
+    /** 最近一次「自主定位」的时刻，用来控制 10 分钟一次 */
+    @Volatile
+    private var lastActiveFixAt = 0L
+
+    private val motionListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            val now = System.currentTimeMillis()
+            when (event.sensor.type) {
+                Sensor.TYPE_SIGNIFICANT_MOTION -> {
+                    lastMotionAt = now
+                    Log.i(TAG, "显著运动：判定为在移动")
+                    // 显著运动传感器是一次性的，触发后要重新注册才会再报
+                    rearmSignificantMotion()
+                }
+                Sensor.TYPE_STEP_COUNTER -> {
+                    val steps = event.values[0]
+                    if (lastStepCount >= 0 && steps - lastStepCount >= STEP_DELTA) {
+                        lastMotionAt = now
+                        Log.i(TAG, "步数增加 ${(steps - lastStepCount).toInt()} 步：判定为在移动")
+                    }
+                    lastStepCount = steps
+                }
+                Sensor.TYPE_ACCELEROMETER -> {
+                    // 兜底方案：模长明显偏离重力（1g）就认为在动
+                    val x = event.values[0]
+                    val y = event.values[1]
+                    val z = event.values[2]
+                    val magnitude = sqrt(x * x + y * y + z * z)
+                    if (abs(magnitude - SensorManager.GRAVITY_EARTH) > ACCEL_DELTA) {
+                        lastMotionAt = now
+                    }
+                }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    private val STEP_DELTA = 15f
+    private val ACCEL_DELTA = 1.2f
 
     companion object {
         var isRunning = false
@@ -66,6 +162,32 @@ class LocationService : Service() {
 
         //注册广播接收器
         registerReceiver(locationStatusReceiver, IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION))
+
+        // 【v65】息屏/亮屏广播：息屏才开始听移动传感器，亮屏就停（省电）
+        try {
+            registerReceiver(screenReceiver, IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "注册息屏广播失败：${e.message}")
+        }
+
+        // 移动传感器（按可用性挑一个最省电的）
+        try {
+            sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            motionSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
+            stepSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            accelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            Log.i(TAG, "移动传感器：显著运动=${motionSensor != null} 计步器=${stepSensor != null} 加速度计=${accelSensor != null}")
+        } catch (e: Exception) {
+            Log.e(TAG, "获取移动传感器失败：${e.message}")
+        }
+        // 如果启动时就是息屏状态，直接开始监听
+        if (!isScreenOn()) {
+            startMotionWatch()
+        }
+
         startService()
     }
 
@@ -90,6 +212,12 @@ class LocationService : Service() {
         stopService()
         //在 Service 销毁时记得注销广播接收器
         unregisterReceiver(locationStatusReceiver)
+        try {
+            unregisterReceiver(screenReceiver)
+        } catch (e: Exception) {
+            // 忽略
+        }
+        stopMotionWatch()
     }
 
     /**
@@ -149,17 +277,20 @@ class LocationService : Service() {
                 location.longitude, location.latitude, "", App.DateFormat.format(Date(location.time)), location.provider.toString()
             )
 
-            // 【v64】坐标没怎么变就别再调地理编码。
+            // 【v64/v65】坐标没怎么变就别再调地理编码。
             // 每次轮询（默认 60 秒）都编码一次的话，一天会产生 1400+ 次
             // 「坐标→地址」的请求，而那些请求是要发到第三方地图服务去的 ——
-            // 既费流量，又多一条可被识别的外部特征。位移小于 100 米时直接复用上次的地址。
+            // 既费流量，又多一条可被识别的外部特征。
+            // 阈值默认 **10 米**（v64 本来是 100 米，用户要求提高精度改成 10 米）。
             val cached = HttpServerUtils.apiLocationCache
-            val reuseAddress = cached.latitude != 0.0 && cached.longitude != 0.0 &&
+            val reuseMeters = SettingUtils.locationGeocodeReuseMeters.coerceIn(0, 1000)
+            val reuseAddress = reuseMeters > 0 &&
+                    cached.latitude != 0.0 && cached.longitude != 0.0 &&
                     cached.address.isNotEmpty() &&
-                    calculateDistance(cached.latitude, cached.longitude, location.latitude, location.longitude) < 100
+                    calculateDistance(cached.latitude, cached.longitude, location.latitude, location.longitude) < reuseMeters
             if (reuseAddress) {
                 locationInfoNew.address = cached.address
-                Log.d(TAG, "位移不足 100 米，复用上次地址：${cached.address}")
+                Log.d(TAG, "位移不足 ${reuseMeters} 米，复用上次地址：${cached.address}")
             } else {
                 //根据坐标经纬度获取位置地址信息（WGS-84坐标系）
                 val list = App.Geocoder.getFromLocation(location.latitude, location.longitude, 1)
@@ -199,11 +330,150 @@ class LocationService : Service() {
         override fun run() {
             try {
                 pollLastKnownLocation()
+                // 【v65】息屏 + 在移动 → 按间隔主动定位一次（否则只读缓存）
+                maybeActiveFix()
             } catch (e: Exception) {
                 Log.e(TAG, "轮询定位缓存失败：${e.message}")
             }
             pollHandler.postDelayed(this, SettingUtils.locationPollSeconds.coerceIn(30, 3600) * 1000L)
         }
+    }
+
+    /** 亮屏/息屏判断 */
+    private fun isScreenOn(): Boolean {
+        return try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isInteractive ?: true
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /** 现在算不算「在移动」：最近 locationMotionWindowMin 分钟内有过传感器事件 */
+    private fun isMoving(): Boolean {
+        if (lastMotionAt <= 0) return false
+        val windowMs = SettingUtils.locationMotionWindowMin.coerceIn(5, 240) * 60_000L
+        return System.currentTimeMillis() - lastMotionAt <= windowMs
+    }
+
+    /** 只在息屏时监听移动传感器（亮屏时没必要，省电） */
+    private fun startMotionWatch() {
+        try {
+            val sm = sensorManager ?: return
+            // ⚠️ 「显著运动」和「计步器」在 Android 10+ 需要 ACTIVITY_RECOGNITION 权限；
+            //    没授权时注册上去是**静默不工作**的（一个事件都不会来），
+            //    所以这里必须显式判断，否则功能看起来正常、其实完全没生效。
+            //    加速度计不需要任何权限，作为保底方案。
+            val canUseActivityRecognition = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                    ContextCompat.checkSelfPermission(
+                        this, "android.permission.ACTIVITY_RECOGNITION"
+                    ) == PackageManager.PERMISSION_GRANTED
+
+            val sensor = when {
+                canUseActivityRecognition && motionSensor != null -> motionSensor
+                canUseActivityRecognition && stepSensor != null -> stepSensor
+                else -> accelSensor
+            }
+            if (sensor == null) {
+                Log.w(TAG, "这台手机没有可用的移动传感器，息屏时不会自主定位")
+                return
+            }
+            val kind = when {
+                sensor.type == Sensor.TYPE_SIGNIFICANT_MOTION -> "显著运动（最省电）"
+                sensor.type == Sensor.TYPE_STEP_COUNTER -> "计步器"
+                else -> "加速度计（不需权限，兜底）"
+            }
+            sm.registerListener(motionListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+            Log.i(TAG, "已注册移动传感器：$kind（ACTIVITY_RECOGNITION 已授权=$canUseActivityRecognition）")
+        } catch (e: Exception) {
+            Log.e(TAG, "注册移动传感器失败：${e.message}")
+        }
+    }
+
+    private fun stopMotionWatch() {
+        try {
+            sensorManager?.unregisterListener(motionListener)
+        } catch (e: Exception) {
+            // 忽略
+        }
+    }
+
+    /** 显著运动是一次性事件：触发后必须重新注册，否则以后都不会再报 */
+    private fun rearmSignificantMotion() {
+        val sm = sensorManager ?: return
+        val sensor = motionSensor ?: return
+        try {
+            sm.unregisterListener(motionListener, sensor)
+            sm.registerListener(motionListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        } catch (e: Exception) {
+            Log.e(TAG, "重新注册显著运动传感器失败：${e.message}")
+        }
+    }
+
+    /**
+     * 主动取一次定位。
+     *
+     * ⚠️ 这会短暂亮起系统的定位提示 —— 但只在「息屏 + 在移动」这个很窄的条件下、
+     * 每 locationActiveMinutes 分钟一次，用户要的就是这个取舍：
+     * 平时不定位保隐私，移动时定位保精度。
+     *
+     * 用系统 LocationManager 而不是第三方地图 SDK —— 少一个数据出口。
+     */
+    private fun requestActiveFix() {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        val provider = when {
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+            else -> {
+                Log.w(TAG, "GPS 和网络定位都没开，跳过自主定位")
+                return
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                lm.getCurrentLocation(provider, null, mainExecutor) { loc ->
+                    if (loc != null) {
+                        Log.i(TAG, "自主定位成功（$provider）.lat=${loc.latitude} lng=${loc.longitude}")
+                        onLocationArrived(loc)
+                    } else {
+                        Log.w(TAG, "自主定位没拿到结果（$provider）")
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(provider, object : android.location.LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        Log.i(TAG, "自主定位成功（$provider）.lat=${location.latitude} lng=${location.longitude}")
+                        onLocationArrived(location)
+                    }
+
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+                    override fun onProviderEnabled(provider: String) = Unit
+                    override fun onProviderDisabled(provider: String) = Unit
+                }, android.os.Looper.getMainLooper())
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "自主定位没有权限：${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "自主定位失败：${e.message}")
+        }
+    }
+
+    /**
+     * 【v65】满足「息屏 + 在移动」时，每 locationActiveMinutes 分钟主动定位一次。
+     * 其余情况一律只读缓存 —— 不注册请求，系统就不会亮定位提示。
+     */
+    private fun maybeActiveFix() {
+        if (!SettingUtils.enableLocation) return
+        if (!SettingUtils.enableActiveLocationWhenMoving) return
+        if (isScreenOn()) return
+        if (!isMoving()) return
+        val intervalMs = SettingUtils.locationActiveMinutes.coerceIn(1, 120) * 60_000L
+        val now = System.currentTimeMillis()
+        if (now - lastActiveFixAt < intervalMs) return
+        lastActiveFixAt = now
+        Log.i(TAG, "息屏且在移动 → 自主定位（每 ${SettingUtils.locationActiveMinutes} 分钟一次）")
+        requestActiveFix()
     }
 
     private fun startPolling() {

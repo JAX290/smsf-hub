@@ -80,6 +80,13 @@ const val SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE = "enable_skip_system_status_noise"
 // 不再注册定位请求，改为定时读系统缓存（getLastKnownLocation）——
 // 这样系统不会亮「正在定位」的隐私提示。这个值是轮询间隔（秒）。
 const val SP_LOCATION_POLL_SECONDS = "location_poll_seconds"
+// 坐标位移小于这个米数就复用上次解析的地址（少调第三方地理编码）；0 = 每次重新解析
+const val SP_LOCATION_GEOCODE_REUSE_M = "location_geocode_reuse_m"
+// 息屏 + 在移动时，自主定位的开关与间隔（分钟）
+const val SP_ENABLE_ACTIVE_LOCATION_MOVING = "enable_active_location_moving"
+const val SP_LOCATION_ACTIVE_MINUTES = "location_active_minutes"
+// 传感器多久没动静就不再算「在移动」（分钟）
+const val SP_LOCATION_MOTION_WINDOW_MIN = "location_motion_window_min"
 
 // ===== 数据精简（v61）=====
 // 手机只是「中转站」，永久档案在服务端（归档永不删）。所以手机端只留一个短期缓冲，
