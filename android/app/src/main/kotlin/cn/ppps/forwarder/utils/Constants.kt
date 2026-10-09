@@ -76,6 +76,11 @@ const val SP_MUSIC_INTERVAL = "music_interval"
 // 它们对用户没有任何信息量；其余通知照发，由服务端分级。
 const val SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE = "enable_skip_system_status_noise"
 
+// ===== 定位（v63）=====
+// 不再注册定位请求，改为定时读系统缓存（getLastKnownLocation）——
+// 这样系统不会亮「正在定位」的隐私提示。这个值是轮询间隔（秒）。
+const val SP_LOCATION_POLL_SECONDS = "location_poll_seconds"
+
 // ===== 数据精简（v61）=====
 // 手机只是「中转站」，永久档案在服务端（归档永不删）。所以手机端只留一个短期缓冲，
 // 到点就裁掉，既省空间也少一份隐私暴露面（数据库里原本存着每条消息的正文）。

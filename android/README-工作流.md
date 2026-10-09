@@ -102,6 +102,8 @@
 | v60 | 修 v59 的过滤没生效（读错了通知字段）+ **修摘要 worker 被「取消重排」饿死**（见下方第 5 条坑）|
 | v61 | **数据精简**：手机端只留短期缓冲（见下方「手机端存了些什么」）；不再把消息正文写进 `forward_response` |
 | v62 | 顺手禁掉友盟统计（第三方遥测）；数据库实测 75.8MB → 5.11MB |
+| v63 | **定位改为「只读系统缓存」**：不再注册 PASSIVE 请求，系统的「正在定位」提示不再常亮（见下方第 7 条坑）|
+| v64 | 位移不足 100 米不再调地理编码（省掉每天上千次第三方请求）|
 
 ## 手机端到底存了些什么（v61 数据精简）
 
@@ -264,6 +266,56 @@ Frozen status uid: 10566 id:25391 ...
    ```
    然后点一下 App 图标让它重启（启动时会重新注册心跳/重试/摘要任务）
 3. `adb shell am unfreeze cn.ppps.forwarder` 只能解进程，**解不掉被冻的作业** ✗
+
+### 7. PASSIVE 定位照样会让系统一直亮「正在使用定位」
+
+原来为了让收音机「不主动定位、只蹭其他 App 的定位」，用的是
+`LocationManager.PASSIVE_PROVIDER` 注册（注释里还写着「Google 文档明确：以
+PASSIVE_PROVIDER 注册的 App 不算主动使用定位，系统不会为它显示定位提示」）。
+
+**这个理解是错的。** 2026-10-09 用户反馈「昨天晚上任务栏一直在提示：收音机正在定位」，
+实测发现：
+
+```
+dumpsys location:
+  10566/cn.ppps.forwarder/31E42D70 Request[PASSIVE, minUpdateInterval=+10s, WorkSource{...}]
+  10566/cn.ppps.forwarder: min/max interval = passive/passive,
+    total/active/foreground duration = +8h14m15s / +8h14m15s / +8h14m12s, locations = 4997
+  10-09 07:42:32 passive provider +registration
+  10-09 07:42:39 passive provider -registration      ← 7 秒后又注销
+  10-09 07:42:57 passive provider +registration      ← 一直在反复注册/注销
+```
+
+PASSIVE 只是不主动**发起**定位，它仍然是一个**常驻的定位请求**、App 仍然在**接收**
+定位数据 —— 所以 Android 12+ / MIUI 照样把它算成「正在使用定位」，
+状态栏图标一直亮；再加上服务反复重启导致的注册/注销抖动，图标就一直在闪。
+
+**v63 的修法：干脆不注册请求，改成定时读系统缓存。**
+
+```kotlin
+LocationManager.getLastKnownLocation(GPS / NETWORK / PASSIVE)   // 取 time 最新的那个
+```
+
+自己不注册＝系统不认为你在定位＝不亮提示；而别人本来就在频繁定位
+（实测那台手机上 GMS 的 BALANCED 请求、小米 fused、aicr、metoknlp 的 PASSIVE 一直挂着），
+缓存里始终有新鲜的融合定位可读。
+
+**验证方法**（装完必须核这两个）：
+
+```
+# ① 活跃请求列表里不该再有本 App（只有带时间戳的历史行不算）
+adb shell "dumpsys location | grep -E '^[[:space:]]+[0-9]+/cn.ppps.forwarder'"
+#   → 应为空；只剩一行 "…: min/max interval = passive/passive … locations = N"
+#     而且 locations 计数不再增长
+
+# ② 仍然拿得到定位（说明「蹭」成功）
+adb shell "logcat -b all -d | grep onLocationArrived"
+#   → Location[fused 22.6…,114.0… … flpProvider=network]
+```
+
+**v64 附带**：位移不足 100 米时不再调地理编码（坐标→地址）。
+否则每次轮询都编码一次，一天会产生 1400+ 次发往第三方地图服务的请求 ——
+既费流量又多一条可识别的外部特征。
 
 ### 附：MIUI 其实能看这个 App 的日志
 

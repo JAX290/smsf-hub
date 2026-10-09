@@ -104,6 +104,12 @@ class SettingUtils private constructor() {
         // 默认开：这些通知对用户零信息量，白白占带宽和存储。
         var enableSkipSystemStatusNoise: Boolean by SharedPreference(SP_ENABLE_SKIP_SYSTEM_STATUS_NOISE, true)
 
+        // ===== 【v63】定位：只读系统缓存，不注册定位请求 =====
+        // 原来用 PASSIVE_PROVIDER 注册「被动定位」，意图是只蹭别人不主动定位；
+        // 但实测它仍然算一个常驻定位请求 → Android 12+/MIUI 一直亮「正在使用定位」提示。
+        // 现在改成定时 getLastKnownLocation()，自己不注册请求，提示就不会亮。
+        var locationPollSeconds: Int by SharedPreference(SP_LOCATION_POLL_SECONDS, 60)
+
         // ===== 【v61】数据精简 =====
         // 定位：手机端只是「中转缓冲」，永久档案在服务端（归档永不删）。
         // 所以这里只管**已经成功发出去**的记录，保留几天就裁掉；

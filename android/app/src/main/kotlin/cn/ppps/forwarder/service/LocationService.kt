@@ -138,6 +138,120 @@ class LocationService : Service() {
         }
     }
 
+    /**
+     * 拿到一个位置之后的处理（原来的监听回调内容，抽出来给「读缓存」这条路复用）。
+     */
+    private fun onLocationArrived(location: Location) {
+        try {
+            Log.d(TAG, "onLocationArrived(location = $location)")
+
+            val locationInfoNew = LocationInfo(
+                location.longitude, location.latitude, "", App.DateFormat.format(Date(location.time)), location.provider.toString()
+            )
+
+            // 【v64】坐标没怎么变就别再调地理编码。
+            // 每次轮询（默认 60 秒）都编码一次的话，一天会产生 1400+ 次
+            // 「坐标→地址」的请求，而那些请求是要发到第三方地图服务去的 ——
+            // 既费流量，又多一条可被识别的外部特征。位移小于 100 米时直接复用上次的地址。
+            val cached = HttpServerUtils.apiLocationCache
+            val reuseAddress = cached.latitude != 0.0 && cached.longitude != 0.0 &&
+                    cached.address.isNotEmpty() &&
+                    calculateDistance(cached.latitude, cached.longitude, location.latitude, location.longitude) < 100
+            if (reuseAddress) {
+                locationInfoNew.address = cached.address
+                Log.d(TAG, "位移不足 100 米，复用上次地址：${cached.address}")
+            } else {
+                //根据坐标经纬度获取位置地址信息（WGS-84坐标系）
+                val list = App.Geocoder.getFromLocation(location.latitude, location.longitude, 1)
+                if (list?.isNotEmpty() == true) {
+                    locationInfoNew.address = list[0].getAddressLine(0)
+                }
+            }
+
+            Log.d(TAG, "locationInfoNew = $locationInfoNew")
+            HttpServerUtils.apiLocationCache = locationInfoNew
+            TaskUtils.locationInfoNew = locationInfoNew
+
+            //触发自动任务
+            val locationInfoOld = TaskUtils.locationInfoOld
+            if (locationInfoOld.longitude != locationInfoNew.longitude || locationInfoOld.latitude != locationInfoNew.latitude || locationInfoOld.address != locationInfoNew.address) {
+                Log.d(TAG, "locationInfoOld = $locationInfoOld")
+
+                val gson = Gson()
+                val locationJsonOld = gson.toJson(locationInfoOld)
+                val locationJsonNew = gson.toJson(locationInfoNew)
+                enqueueLocationWorkerRequest(TASK_CONDITION_TO_ADDRESS, locationJsonOld, locationJsonNew)
+                enqueueLocationWorkerRequest(TASK_CONDITION_LEAVE_ADDRESS, locationJsonOld, locationJsonNew)
+
+                TaskUtils.locationInfoOld = locationInfoNew
+            }
+
+            //【新增】位置变化时直接上报到服务端（不依赖定时任务，带节流）
+            maybeReportLocation(locationInfoNew)
+        } catch (e: Exception) {
+            Log.e(TAG, "处理定位结果失败：${e.message}")
+        }
+    }
+
+    /** 轮询用的 Handler（主线程即可，读缓存是轻量操作） */
+    private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            try {
+                pollLastKnownLocation()
+            } catch (e: Exception) {
+                Log.e(TAG, "轮询定位缓存失败：${e.message}")
+            }
+            pollHandler.postDelayed(this, SettingUtils.locationPollSeconds.coerceIn(30, 3600) * 1000L)
+        }
+    }
+
+    private fun startPolling() {
+        pollHandler.removeCallbacks(pollRunnable)
+        pollHandler.post(pollRunnable)
+        Log.i(TAG, "开始轮询定位缓存，间隔 ${SettingUtils.locationPollSeconds.coerceIn(30, 3600)} 秒")
+    }
+
+    private fun stopPolling() {
+        try {
+            pollHandler.removeCallbacks(pollRunnable)
+        } catch (e: Exception) {
+            // 忽略
+        }
+    }
+
+    /**
+     * 【v63】只读系统缓存里的「最后一次已知位置」，**不注册任何定位请求**。
+     *
+     * 为什么这样就没有定位提示：注册请求 = App 在「使用定位」→ 系统亮图标；
+     * 而 getLastKnownLocation 只是把别人早就定位好的结果读出来，我们自己没在定位。
+     * 实测这台手机上 GMS（BALANCED）、小米 fused、aicr 等都常驻定位请求，
+     * 缓存里始终有新鲜的坐标可用。
+     *
+     * 三个 provider 都读一遍，取时间最新的那个。
+     */
+    private fun pollLastKnownLocation() {
+        if (!SettingUtils.enableLocation) return
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        val best = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER
+        ).mapNotNull { p ->
+            try {
+                lm.getLastKnownLocation(p)
+            } catch (e: Exception) {
+                null
+            }
+        }.maxByOrNull { it.time }
+
+        if (best == null) {
+            Log.d(TAG, "系统缓存里还没有可用的位置（等其他 App 定位后自然就有了）")
+            return
+        }
+        onLocationArrived(best)
+    }
+
     private fun startService() {
         try {
             //清空缓存
@@ -146,42 +260,10 @@ class LocationService : Service() {
 
             if (SettingUtils.enableLocation && PermissionUtils.isGranted(android.Manifest.permission.ACCESS_COARSE_LOCATION, android.Manifest.permission.ACCESS_FINE_LOCATION)) {
 
-                //设置定位监听
+                //设置定位监听（只有在自动任务显式用到 LocationClient 时才会真正启动）
                 App.LocationClient.setOnLocationListener(object : OnLocationListener() {
                     override fun onLocationChanged(location: Location) {
-                        //位置信息
-                        Log.d(TAG, "onLocationChanged(location = ${location})")
-
-                        val locationInfoNew = LocationInfo(
-                            location.longitude, location.latitude, "", App.DateFormat.format(Date(location.time)), location.provider.toString()
-                        )
-
-                        //根据坐标经纬度获取位置地址信息（WGS-84坐标系）
-                        val list = App.Geocoder.getFromLocation(location.latitude, location.longitude, 1)
-                        if (list?.isNotEmpty() == true) {
-                            locationInfoNew.address = list[0].getAddressLine(0)
-                        }
-
-                        Log.d(TAG, "locationInfoNew = $locationInfoNew")
-                        HttpServerUtils.apiLocationCache = locationInfoNew
-                        TaskUtils.locationInfoNew = locationInfoNew
-
-                        //触发自动任务
-                        val locationInfoOld = TaskUtils.locationInfoOld
-                        if (locationInfoOld.longitude != locationInfoNew.longitude || locationInfoOld.latitude != locationInfoNew.latitude || locationInfoOld.address != locationInfoNew.address) {
-                            Log.d(TAG, "locationInfoOld = $locationInfoOld")
-
-                            val gson = Gson()
-                            val locationJsonOld = gson.toJson(locationInfoOld)
-                            val locationJsonNew = gson.toJson(locationInfoNew)
-                            enqueueLocationWorkerRequest(TASK_CONDITION_TO_ADDRESS, locationJsonOld, locationJsonNew)
-                            enqueueLocationWorkerRequest(TASK_CONDITION_LEAVE_ADDRESS, locationJsonOld, locationJsonNew)
-
-                            TaskUtils.locationInfoOld = locationInfoNew
-                        }
-
-                        //【新增】位置变化时直接上报到服务端（不依赖定时任务，带节流）
-                        maybeReportLocation(locationInfoNew)
+                        onLocationArrived(location)
                     }
                 })
 
@@ -194,6 +276,8 @@ class LocationService : Service() {
                     }
                 })
 
+                // 【v63】这里原来调 restartLocation() 去 startLocation()（持有 PASSIVE 请求），
+                // 现在改成只轮询系统缓存 —— 详见 restartLocation() 的说明。
                 restartLocation()
                 isRunning = true
             } else if (!SettingUtils.enableLocation && App.LocationClient.isStarted()) {
@@ -214,6 +298,8 @@ class LocationService : Service() {
         TaskUtils.locationInfoOld = LocationInfo()
 
         isRunning = try {
+            // 【v63】先把轮询停掉，再停 LocationClient（正常路径下它本来就没启动）
+            stopPolling()
             //如果已经开始定位，则先停止定位
             if (SettingUtils.enableLocation && App.LocationClient.isStarted()) {
                 App.LocationClient.stopLocation()
@@ -228,34 +314,26 @@ class LocationService : Service() {
         }
     }
 
+    /**
+     * 【v63 改造】这里**不再启动 LocationClient**（即不再持有任何定位请求）。
+     *
+     * 原方案是「以 PASSIVE_PROVIDER 注册」——本意是只蹭别人、不主动定位。
+     * 但 2026-10-08/09 在小米14 上实测发现行不通：
+     *   · PASSIVE 只是不主动**发起**定位，它仍然是一个常驻定位请求，
+     *     App 仍然在**接收**定位数据，Android 12+ / MIUI 就照样把
+     *     「收音机正在定位」的隐私提示一直亮着（用户反馈「昨天晚上任务栏一直在提示」）；
+     *   · dumpsys location 能看到它挂了 8 小时 14 分：
+     *       Request[PASSIVE, minUpdateInterval=+10s, WorkSource{10566 cn.ppps.forwarder}]
+     *       total/active/foreground duration = +8h14m15s/+8h14m15s/+8h14m12s, locations = 4997
+     *   · 而且服务反复重启导致注册/注销抖动
+     *     （07:42:32 注册 → 07:42:39 注销 → 07:42:57 又注册），提示一直在闪。
+     *
+     * 现在改成真的只读缓存：定时 getLastKnownLocation()，不注册请求 → 不亮提示。
+     * 代价：位置新鲜度取决于别人；没人定位时坐标停在旧值（「蹭定位」本来就是这个语义）。
+     */
     private fun restartLocation() {
-        //如果已经开始定位，则先停止定位
-        if (App.LocationClient.isStarted()) {
-            App.LocationClient.stopLocation()
-        }
-        if (LocationUtils.isLocationEnabled(App.context) && LocationUtils.hasLocationCapability(App.context)) {
-            //可根据具体需求设置定位配置参数（这里只列出一些主要的参数）
-            val locationOption = App.LocationClient.getLocationOption().setAccuracy(SettingUtils.locationAccuracy)//设置位置精度：高精度
-                .setPowerRequirement(SettingUtils.locationPowerRequirement) //设置电量消耗：低电耗
-                .setMinTime(SettingUtils.locationMinInterval)//设置位置更新最小时间间隔（单位：毫秒）； 默认间隔：10000毫秒，最小间隔：1000毫秒
-                .setMinDistance(SettingUtils.locationMinDistance)//设置位置更新最小距离（单位：米）；默认距离：0米
-                .setOnceLocation(false)//设置是否只定位一次，默认为 false，当设置为 true 时，则只定位一次后，会自动停止定位
-                // 【2026-09-24 改造】改用「被动定位」：只接收其他 App 触发的定位结果，
-                // 自己不主动发起定位。
-                // 原因：Android 11+ 只要 App 在后台「主动」请求定位，系统就会亮出定位隐私提示
-                //      （小米上显示为「收音机正在使用融合卫星定位」）。
-                //      Google 文档明确：以 PASSIVE_PROVIDER 注册的 App 不算「主动使用定位」，
-                //      系统不会为它显示定位提示。
-                // 代价：位置更新依赖其他 App（地图/天气/系统服务）触发的定位，
-                //      手机长时间无人使用、没有 App 定位时，位置会停留在上一次的值。
-                .setProvider(LocationManager.PASSIVE_PROVIDER)//被动定位，不触发系统定位提示
-                .setLastKnownLocation(false)//设置是否获取最后一次缓存的已知位置，默认为 true
-            //设置定位配置参数
-            App.LocationClient.setLocationOption(locationOption)
-            App.LocationClient.startLocation()
-        } else {
-            Log.w(TAG, "onException: GPS未开启")
-        }
+        Log.i(TAG, "v63：不再注册定位请求，改为读系统缓存")
+        startPolling()
     }
 
     private fun enqueueLocationWorkerRequest(
@@ -275,13 +353,14 @@ class LocationService : Service() {
         if (LocationUtils.isLocationEnabled(App.context) && LocationUtils.hasLocationCapability(App.context)) {
             //已启用
             Log.d(TAG, "handleLocationStatusChanged: 已启用")
-            if (SettingUtils.enableLocation && !App.LocationClient.isStarted()) {
-                App.LocationClient.startLocation()
+            // 【v63】不启动 LocationClient，只保证轮询在跑
+            if (SettingUtils.enableLocation) {
+                startPolling()
             }
         } else {
             //已停用
             Log.d(TAG, "handleLocationStatusChanged: 已停用")
-            if (SettingUtils.enableLocation && App.LocationClient.isStarted()) {
+            if (App.LocationClient.isStarted()) {
                 App.LocationClient.stopLocation()
             }
         }
