@@ -18,6 +18,8 @@
         <span class="badge {% if st.level == 'ok' %}b-ok{% elif st.level == 'warn' %}b-warn{% elif st.level == 'offline' %}b-bad{% else %}b-off{% endif %}">{{ st.text }}</span>
       </div>
       <div class="s">
+        {# 【v67】把版本标签（v66）放在最前面：一眼就能看出装的是哪个包 #}
+        {% if d.version_label %}<b>{{ d.version_label }}</b> · {% endif %}
         {% if d.app_version %}{{ d.app_version }}{% endif %}
         {% if d.version_code %}（{{ d.version_code }}）{% endif %}
         {% if st.detail %}· {{ st.detail }}{% endif %}

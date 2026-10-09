@@ -72,7 +72,15 @@ android {
         minSdkVersion build_versions.min_sdk
         targetSdkVersion build_versions.target_sdk
         versionCode build_versions.version_code
-        versionName = "${build_versions.version_name}.${buildDate}"
+        // 【v67】版本名里带上明确标签，例如 3.5.0.261009.v66
+        //
+        // 为什么改：原来只有 3.5.0.<日期>，同一天编出来的多个包在系统「应用信息」里
+        // 长得一模一样（都是 3.5.0.261009），根本分不出装的是 v 几 ——
+        // 面板上的「版本」也一样看不出。加上标签后三处都能直接看出来：
+        //   · 系统设置 → 应用信息
+        //   · App 内「关于」
+        //   · 服务端面板（心跳上报的就是这个 versionName）
+        versionName = "${build_versions.version_name}.${buildDate}.${build_versions.version_label}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "BUILD_TIME", "\"${buildTime}\""
         buildConfigField "String", "GIT_COMMIT_ID", "\"${gitCommitId}\""
@@ -209,7 +217,8 @@ android {
             def abiName = output.getFilter(com.android.build.OutputFile.ABI)
             if (abiName == null) abiName = "universal"
             output.versionCodeOverride = abiCodes.get(abiName, 0) * 100000 + variant.versionCode
-            output.outputFileName = "Radio_${versionName}_${output.versionCode}_${abiName}_${variant.name}.apk"
+            // 【v67】文件名开头放版本标签，一眼就能认出是哪个包（原来只有 300087 这种数字）
+            output.outputFileName = "Radio_${build_versions.version_label}_${versionName}_${output.versionCode}_${abiName}_${variant.name}.apk"
 
             // 修改 output-metadata.json 追加编译日期、编译时间、Git Commit ID
             def assembleTaskName = "assemble${variant.name.capitalize()}"

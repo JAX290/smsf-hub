@@ -11,11 +11,41 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger("smsf-hub.devices")
+
+
+_VERSION_LABEL_RE = re.compile(r"\.(v\d+)$")
+
+
+def version_label(version_name: str, version_code: int) -> str:
+    """从版本名/版本号推出「v66」这样的标签，方便一眼看出装的是哪个包。
+
+    背景：手机上显示的版本名原来是 3.5.0.<日期>（例 3.5.0.261009），
+    同一天编出来的多个包长得一模一样，分不出是 v 几。
+    v67 起版本名末尾会带上标签（3.5.0.261009.v66），优先用它；
+    老版本没有标签，就按 versionCode 反推 —— APK 里 versionCode = v号 + 21
+    （v51=72 那次定下来的偏移，见 versions.gradle 的 version_code）。
+    """
+    m = _VERSION_LABEL_RE.search(str(version_name or "").strip())
+    if m:
+        return m.group(1)
+    try:
+        code = int(version_code or 0)
+    except (TypeError, ValueError):
+        code = 0
+    # ⚠️ 心跳上报的是**装上去之后的完整 versionCode**，里面带了 ABI 前缀：
+    #    300078 = 3 * 100000 + 78（78 才是真正的内部序号）。
+    #    一开始忘了取模，结果算出个 v300057 这种鬼东西。
+    if code >= 100000:
+        code = code % 100000
+    if code >= 30:
+        return "v%d" % (code - 21)
+    return ""
 
 
 class DeviceRegistry:
@@ -273,6 +303,10 @@ class DeviceRegistry:
         for rec in recs:
             item = dict(rec)
             item["display"] = rec.get("remark") or rec.get("label") or rec.get("key", "")
+            # 【v67】「v66」这样的标签：面板上直接显示，不用去猜 versionCode 的偏移
+            item["version_label"] = version_label(
+                rec.get("app_version") or "", rec.get("version_code") or 0
+            )
             item["status"] = self.status_of(rec)
             out.append(item)
         # 把离线的排后面（在线的先看）
