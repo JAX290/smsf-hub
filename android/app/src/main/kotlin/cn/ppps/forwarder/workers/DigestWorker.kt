@@ -53,6 +53,20 @@ class DigestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         private const val KEEP_DAYS = 30L
 
         /**
+         * 【v70/v71】一个摘要包**序列化之后**允许的最大字节数。
+         *
+         * 摘要包是塞进 WorkManager 的 setInputData 交给 SendWorker 的，而
+         * **WorkManager 的 Data 有 10240 字节硬上限** —— 超了不会截断，而是直接抛
+         * "Data cannot occupy more than 10240 bytes when serialized"，整批一条都发不出去 ✗。
+         *
+         * ⚠️ v70 第一版按「正文 UTF-8 字节数 ≤ 8000」切，**还是不够**：正文塞进 Gson
+         * 会再做一次 JSON 转义（引号、换行、非 ASCII 都会膨胀），8000 字节的正文
+         * 序列化后轻松超过 10240 —— 实测装上去日志里还是同一句异常 ✗。
+         * 所以 v71 改成**量序列化后的真实大小**（serializedSize()），不猜。
+         */
+        private const val MAX_DATA_BYTES = 9000
+
+        /**
          * 排一次冲刷。delayMs 是「最早一条到期还有多久」——
          * 到点才唤醒，不空转（和 HeartbeatWorker 一样用一次性任务）。
          */
@@ -132,38 +146,88 @@ class DigestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
         if (due.isNotEmpty()) {
             // 按档次分组：短窗一包、日摘要一包（不同档次的时效要求不一样）
+            // 【v70】每组还要**再按字节数切**，否则超过 WorkManager 的 10KB 上限就整批发不出去
             val groups = due.groupBy { it.tier }
-            groups.forEach { (tier, items) -> handOff(items, tier) }
+            var packets = 0
+            groups.forEach { (tier, items) ->
+                splitBySize(items).forEach { chunk ->
+                    handOff(chunk, tier)
+                    packets++
+                }
+            }
             dao.deleteByIds(due.map { it.id })
-            Log.i(TAG, "已交给发送队列：" + due.size + " 条，分 " + groups.size + " 个摘要包")
+            Log.i(TAG, "已交给发送队列：" + due.size + " 条，切成 " + packets + " 个摘要包")
         }
 
         // 兜底：清掉异常久远的积压，防表无限膨胀
         dao.purgeBefore(now - KEEP_DAYS * 24 * 3600 * 1000L)
     }
 
+    /** 单条消息在摘要包里的 JSON（服务端 parse_digest 按行解析） */
+    private fun itemJson(it: Digest): String {
+        val obj = JSONObject()
+        obj.put("ts", it.time)
+        // 注意：手机端内部把应用通知叫 "app"，服务端叫 "notify"。
+        // 这里必须转成服务端的叫法，否则会被当成短信（分级直接给「关键」）。
+        obj.put("k", if (it.type == "app") "notify" else it.type)
+        obj.put("a", it.from)
+        obj.put("n", it.app)
+        obj.put("ti", it.title)
+        obj.put("c", it.content)
+        // JSONObject.toString() 会把正文里的换行转义成 \n，所以一条正好占一行
+        return obj.toString()
+    }
+
+    /**
+     * 【v71】这条摘要包真塞进 WorkManager 会有多大 —— **量真实值，不估算**。
+     *
+     * 因为正文要先拼成 DIG|N + 每行 JSON，再被 Gson 包一层（转义一次），
+     * 任何「按正文字节数 * 系数」的估法都会在极端内容上翻车（v70 就翻了 ✗）。
+     */
+    private fun serializedSize(body: String): Int {
+        val msg = MsgInfo(type = "app", from = MARK, content = body, date = Date(), simInfo = "")
+        return Gson().toJson(msg).toByteArray(Charsets.UTF_8).size
+    }
+
+    /** 拼摘要包正文 */
+    private fun buildBody(lines: List<String>): String {
+        val sb = StringBuilder("DIG|").append(lines.size)
+        for (l in lines) sb.append("\n").append(l)
+        return sb.toString()
+    }
+
+    /**
+     * 【v71】把一批切成若干小包，**保证每包序列化后都不超过 MAX_DATA_BYTES**。
+     *
+     * 做法是逐个累加、每加一条就实测一次大小，超了就切。
+     * 单条自己就超限的（极长正文）也让它单独成包 —— 至少不会把整批拖死。
+     */
+    private fun splitBySize(items: List<Digest>): List<List<Digest>> {
+        val out = mutableListOf<List<Digest>>()
+        var cur = mutableListOf<Digest>()
+        var lines = mutableListOf<String>()
+        for (it in items) {
+            val nextLines = lines + itemJson(it)
+            if (lines.isNotEmpty() && serializedSize(buildBody(nextLines)) > MAX_DATA_BYTES) {
+                out.add(cur)
+                cur = mutableListOf()
+                lines = mutableListOf()
+            }
+            cur.add(it)
+            lines.add(itemJson(it))
+        }
+        if (cur.isNotEmpty()) out.add(cur)
+        return out
+    }
+
     /** 把一批消息打成一个摘要包，交给 SendWorker（复用离线队列的重试能力）。 */
     private fun handOff(items: List<Digest>, tier: Int) {
-        val body = StringBuilder()
-        body.append("DIG|").append(items.size)
-        for (it in items) {
-            val obj = JSONObject()
-            obj.put("ts", it.time)
-            // 注意：手机端内部把应用通知叫 "app"，服务端叫 "notify"。
-            // 这里必须转成服务端的叫法，否则会被当成短信（分级直接给「关键」）。
-            obj.put("k", if (it.type == "app") "notify" else it.type)
-            obj.put("a", it.from)
-            obj.put("n", it.app)
-            obj.put("ti", it.title)
-            obj.put("c", it.content)
-            // JSONObject.toString() 会把正文里的换行转义成 \n，所以一条正好占一行
-            body.append("\n").append(obj.toString())
-        }
+        val body = buildBody(items.map { itemJson(it) })
 
         val msg = MsgInfo(
             type = "app",
             from = MARK,
-            content = body.toString(),
+            content = body,
             date = Date(),
             simInfo = ""
         )
@@ -171,6 +235,7 @@ class DigestWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             .setInputData(workDataOf(Worker.SEND_MSG_INFO to Gson().toJson(msg)))
             .build()
         WorkManager.getInstance(applicationContext).enqueue(request)
-        Log.i(TAG, "摘要包已入队：tier=$tier 条数=${items.size}")
+        Log.i(TAG, "摘要包已入队：tier=" + tier + " 条数=" + items.size +
+                " 序列化后=" + serializedSize(body) + " 字节（上限 " + MAX_DATA_BYTES + "）")
     }
 }

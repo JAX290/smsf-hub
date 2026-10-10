@@ -296,9 +296,19 @@ class NotificationService : NotificationListenerService() {
             return false
         }
         if (uid < 1000 || uid >= 10000) return false
-        val cat = (notification.category ?: "").lowercase()
-        return cat == "service" || cat == "progress" || cat == "transport" ||
-                cat == "sysinfo" || cat == "status" || cat == "system"
+
+        // 【v70】不再要求「有通知类别」。
+        //
+        // 原来这里还要求 category 属于 service/progress/transport/sysinfo/status/system，
+        // 但真机上那些最烦人的常驻通知**根本没有类别** ✗：
+        //   已连接到 USB 调试 / 正在通过 USB 充电 / 扫描设备 / 0B/s↑ 0B/s↓ / 正在同步天气
+        // 实测 2026-10-10 小米14 的摘要队列里 2656 条积压，绝大多数就是这些
+        //（1410 条是 tier=0 的常驻状态），白白占满上报管道。
+        //
+        // 现在的判据很干脆：**系统应用（uid < 10000）发的常驻通知，一律不发**。
+        // 第三方 App 的常驻通知（音乐播放器、下载器等）仍然照发，
+        // 由服务端判成「噪音」并在归档里只留一行摘要。
+        return true
     }
 
     /**

@@ -2,13 +2,13 @@ import java.util.regex.Matcher
 import java.util.regex.Pattern
 
 def build_versions = [:]
-build_versions.version_code = 90
+build_versions.version_code = 92
 build_versions.version_name = "3.5.0"
-// 【v69】给「显示出来的版本名」加一个明确标签（本版就是 v69）。
-// 原来是 3.5.0.<日期>（例：3.5.0.261009），同一天编多少个包都长一样、
-// 在系统「应用信息」和面板里根本分不出是 v 几 —— 现在会显示成 3.5.0.261009.v69。
+// 【v71】给「显示出来的版本名」加一个明确标签（本版就是 v71）。
+// 原来是 3.5.0.<日期>（例：3.5.0.261010），同一天编多少个包都长一样、
+// 在系统「应用信息」和面板里根本分不出是 v 几 —— 现在会显示成 3.5.0.261010.v71。
 // 版本号与标签的换算：versionCode = v号 + 21（v51=72 那次定下的偏移）
-build_versions.version_label = "v69"
+build_versions.version_label = "v71"
 build_versions.min_sdk = 19
 build_versions.target_sdk = 33
 build_versions.build_tools = "33.0.1"
