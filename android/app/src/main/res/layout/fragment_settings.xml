@@ -1226,6 +1226,48 @@
 
             </LinearLayout>
 
+            <!-- 【v69】第二个入口：MIUI 的省电策略。
+                 为什么要有两个：小米/红米把系统的「忽略电池优化」入口换成了自家的
+                 「电量详情」页（那页没有开关），实测标准 intent 在 MIUI 上走不通。
+                 真正能设到「无限制」的是「电池优化列表」和「应用信息」两处，
+                 所以并排放两个开关，各自跳一个入口，用户哪个能设通用哪个。 -->
+            <LinearLayout
+                android:id="@+id/layout_battery_setting_miui"
+                style="@style/BarStyle.Switch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/battery_setting_miui"
+                        android:textStyle="bold"
+                        tools:ignore="RelativeOverlap" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/battery_setting_miui_tips"
+                        android:textSize="@dimen/text_size_mini"
+                        tools:ignore="SmallSp" />
+
+                </LinearLayout>
+
+                <com.xuexiang.xui.widget.button.switchbutton.SwitchButton
+                    android:id="@+id/sb_battery_setting_miui"
+                    style="@style/SwitchButtonStyle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    tools:ignore="TouchTargetSizeCheck" />
+
+            </LinearLayout>
+
             <!-- 【新增】功能8：一键跳转系统通知设置（把本 App 的通知关掉） -->
             <LinearLayout
                 android:id="@+id/layout_notify_setting"

@@ -173,7 +173,8 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         //开机启动
         checkWithReboot(binding!!.sbWithReboot, binding!!.tvAutoStartup)
         //忽略电池优化设置
-        batterySetting(binding!!.layoutBatterySetting, binding!!.sbBatterySetting)
+        batterySetting(binding!!.layoutBatterySetting, binding!!.sbBatterySetting,
+            binding!!.layoutBatterySettingMiui, binding!!.sbBatterySettingMiui)
         //功能8：一键跳系统通知设置（把本 App 的通知关掉）
         setupNotifySettingSwitch(binding!!.sbNotifySetting)
         //不在最近任务列表中显示
@@ -267,8 +268,9 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         refreshLockState()
     }
 
-    /** 「功能7 忽略电池优化」的开关引用，供 onResume 刷新真实状态用 */
+    /** 「功能7 忽略电池优化」的两个开关引用，供 onResume 刷新真实状态用 */
     private var sbBatterySettingRef: SwitchButton? = null
+    private var sbBatteryMiuiRef: SwitchButton? = null
 
     override fun initListeners() {
         binding!!.btnSilentPeriod.setOnClickListener(this)
@@ -1030,67 +1032,75 @@ class SettingsFragment : BaseFragment<FragmentSettingsBinding?>(), View.OnClickL
         }
     }
 
-    //电池优化设置
+    //电池优化设置（【v69】改成两个开关）
     @RequiresApi(api = Build.VERSION_CODES.M)
     @SuppressLint("UseSwitchCompatOrMaterialCode", "ObsoleteSdkInt")
-    private fun batterySetting(layoutBatterySetting: LinearLayout, sb: SwitchButton) {
+    private fun batterySetting(
+        layoutBatterySetting: LinearLayout,
+        sb: SwitchButton,
+        layoutMiui: LinearLayout,
+        sbMiui: SwitchButton
+    ) {
         //安卓6.0以下没有忽略电池优化
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             layoutBatterySetting.visibility = View.GONE
+            layoutMiui.visibility = View.GONE
             return
         }
 
         sbBatterySettingRef = sb
+        sbBatteryMiuiRef = sbMiui
 
-        try {
-            sb.isChecked = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
-            sb.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean ->
-                // 每次都重新读一遍真实状态 —— 原来把状态在 setup 时读一次就存着，
-                // 用户去系统设置里改完回来，开关还是旧的（踩过）
-                val granted = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+        // 第二个入口只在 MIUI 上才有意义（别的系统第一个开关就是标准弹框）
+        layoutMiui.visibility = if (KeepAliveUtils.isMiui()) View.VISIBLE else View.GONE
+
+        // ① 电池优化列表：MIUI 上落到自家省电策略页；原生系统是标准白名单页
+        bindBatterySwitch(sb) { KeepAliveUtils.openBatteryOptimizationList(requireActivity()) }
+        // ② 应用信息：MIUI 的应用信息里也有「省电策略」，是第二条能设到「无限制」的路
+        bindBatterySwitch(sbMiui) { KeepAliveUtils.openAppInfo(requireActivity()) }
+    }
+
+    /**
+     * 【v69】绑定一个「电池优化」开关。
+     *
+     * 规则（用户明确要求）：
+     *   · **已授权 → 开关是打开的，而且点不动**（只提示"已授权，不能关闭"）
+     *     为什么不许关：关掉之后手机夜间进深度休眠会切断网络，心跳和上报全失败、
+     *     消息攒到早上才补发（就是 v58 修的「僵尸记录」那类问题）。
+     *   · 未授权 → 点它跳到对应的系统页面去授权
+     */
+    private fun bindBatterySwitch(sb: SwitchButton, open: () -> Unit) {
+        sb.isChecked = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+        sb.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean ->
+            val granted = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+            if (granted) {
+                // 已授权：锁死在打开状态，不允许关闭
                 if (!isChecked) {
-                    XToastUtils.info(R.string.isIgnored2)
-                    sb.isChecked = granted
-                    return@setOnCheckedChangeListener
-                }
-                if (granted) {
-                    XToastUtils.info(R.string.isIgnored)
-                    sb.isChecked = true
-                    return@setOnCheckedChangeListener
-                }
-
-                if (KeepAliveUtils.isMiui()) {
-                    // 【v68】MIUI 上标准入口是废的：实测会被解析到 MIUI 自己的「电量详情」页，
-                    // 那页只有「结束运行/卸载/应用信息」，没有电池优化开关。
-                    // 所以给两个真正能设到「无限制」的入口让用户自己选。
-                    MaterialDialog.Builder(requireContext())
-                        .title(getString(R.string.battery_miui_title))
-                        .content(getString(R.string.battery_miui_content))
-                        .positiveText(getString(R.string.battery_miui_entry_list))
-                        .negativeText(getString(R.string.battery_miui_entry_appinfo))
-                        .cancelable(true)
-                        .onPositive { _: MaterialDialog?, _: DialogAction? ->
-                            KeepAliveUtils.openBatteryOptimizationList(requireActivity())
-                        }
-                        .onNegative { _: MaterialDialog?, _: DialogAction? ->
-                            KeepAliveUtils.openAppInfo(requireActivity())
-                        }
-                        .show()
+                    XToastUtils.info(R.string.battery_granted_locked)
                 } else {
-                    KeepAliveUtils.ignoreBatteryOptimization(requireActivity())
+                    XToastUtils.info(R.string.isIgnored)
                 }
+                sb.isChecked = true
+                return@setOnCheckedChangeListener
             }
-        } catch (ex: Exception) {
-            ex.printStackTrace()
+            if (!isChecked) {
+                XToastUtils.info(R.string.isIgnored2)
+                sb.isChecked = false
+                return@setOnCheckedChangeListener
+            }
+            // 还没授权：先复位成关闭，等用户去系统设置里设完、回来时 onResume 再刷新真实状态
+            sb.isChecked = false
+            open()
         }
     }
 
-    /** 从系统设置页回来时把「功能7」开关刷成真实状态 */
+    /** 从系统设置页回来时把两个「电池优化」开关刷成真实状态 */
     private fun refreshBatterySwitch() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         try {
-            val sb = sbBatterySettingRef ?: return
-            sb.isChecked = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+            val granted = KeepAliveUtils.isIgnoreBatteryOptimization(requireActivity())
+            sbBatterySettingRef?.isChecked = granted
+            sbBatteryMiuiRef?.isChecked = granted
         } catch (e: Exception) {
             // 忽略
         }

@@ -1308,4 +1308,8 @@
     <string name="battery_miui_content">小米/MIUI 把系统的电池优化入口换成了自家的页面，那个页面里没有开关。\n\n请从下面任一入口，把「收音机」的省电策略改成「无限制」：\n\n① 电池优化列表：找到「收音机」→ 省电策略 → 无限制\n② 应用信息 → 省电策略 → 无限制\n\n改完回到本页，开关会自动变绿。</string>
     <string name="battery_miui_entry_list">① 电池优化列表</string>
     <string name="battery_miui_entry_appinfo">② 应用信息</string>
+    <!-- 【v69】第二个电池优化入口（MIUI 上标准入口是废的，见 layout 里的说明） -->
+    <string name="battery_setting_miui">省电策略（MIUI 第二个入口）</string>
+    <string name="battery_setting_miui_tips">小米/红米把系统电池优化入口换成了自家页面。这里走「应用信息 → 省电策略」，同样能设成「无限制」</string>
+    <string name="battery_granted_locked">已授权，不能关闭（关了夜里会被系统切断网络）</string>
 </resources>
